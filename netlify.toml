@@ -1,0 +1,10 @@
+[build]
+  publish = "frontend/dist"
+  functions = "backend/functions"
+  command = "cd frontend && npm run build"
+
+# 前端统一通过 /api/* 访问后端函数
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
