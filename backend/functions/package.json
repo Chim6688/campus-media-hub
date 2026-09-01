@@ -2,5 +2,8 @@
   "name": "tweet-workflow-backend",
   "private": true,
   "version": "0.1.0",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.4"
+  }
 }
