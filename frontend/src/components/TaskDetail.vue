@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, reactive, nextTick, watch } from 'vue';
 import { request } from '../api/client.js';
 
 const props = defineProps({ task: Object });
@@ -13,6 +13,30 @@ const savedAt = ref('');
 const error = ref('');
 const aiLoading = ref(''); // 当前进行中的 AI 动作名，用于按钮禁用态
 const contentRef = ref(null); // 正文 textarea 引用，用于取选中文字
+
+// ========== 通用输入弹窗 ==========
+// 嵌入式预览（iframe）不支持原生 prompt()，统一用页内弹窗替代
+const modal = reactive({ show: false, message: '', value: '', resolve: null });
+const modalInput = ref(null);
+
+// 用法：const text = await askUser('提示语')；取消返回 null
+function askUser(message, defaultValue = '') {
+  return new Promise((resolve) => {
+    modal.message = message;
+    modal.value = defaultValue;
+    modal.resolve = resolve;
+    modal.show = true;
+    nextTick(() => modalInput.value?.focus());
+  });
+}
+function confirmModal() {
+  modal.show = false;
+  modal.resolve?.(modal.value);
+}
+function cancelModal() {
+  modal.show = false;
+  modal.resolve?.(null);
+}
 
 // 切换任务时重置本地编辑态
 watch(() => props.task.id, () => {
@@ -60,7 +84,8 @@ async function callAI(action, payload) {
 // 解析初稿：按"标题：/摘要：/正文："结构拆开填入表单
 async function generateDraft() {
   error.value = '';
-  const notes = prompt('补充要点/素材（可留空）：') || '';
+  const notes = await askUser('补充要点/素材（可留空）：');
+  if (notes === null) return; // 取消 = 放弃生成
   try {
     const text = await callAI('draft', {
       theme: props.task.theme,
@@ -84,7 +109,7 @@ async function generateTitles() {
   error.value = '';
   try {
     const text = await callAI('title', { title: title.value, content: content.value });
-    const chosen = prompt(`选择一个标题（输入序号）\n${text}`);
+    const chosen = await askUser(`选择一个标题（输入序号）\n${text}`);
     if (!chosen) return;
     const lines = text.split('\n').filter((l) => l.trim());
     const idx = parseInt(chosen, 10) - 1;
@@ -116,7 +141,7 @@ async function rewriteSelection() {
     return;
   }
   const presets = ['更口语化', '精简一点', '扩写细节', '更有数据感'];
-  const input = prompt('改写指令（或输入序号用快捷方向）\n1. 更口语化\n2. 精简一点\n3. 扩写细节\n4. 更有数据感');
+  const input = await askUser('改写指令（或输入序号用快捷方向）\n1. 更口语化\n2. 精简一点\n3. 扩写细节\n4. 更有数据感');
   if (!input) return;
   const n = parseInt(input, 10);
   const instruction = n >= 1 && n <= 4 ? presets[n - 1] : input;
@@ -268,6 +293,18 @@ async function emitRefreshAndGet() {
         <button @click="addComment">提交</button>
       </div>
     </div>
+
+    <!-- 通用输入弹窗：替代原生 prompt（嵌入式预览环境不支持） -->
+    <div v-if="modal.show" class="modal-mask" @click.self="cancelModal">
+      <div class="modal">
+        <p class="modal-msg">{{ modal.message }}</p>
+        <input ref="modalInput" v-model="modal.value" @keyup.enter="confirmModal" @keyup.esc="cancelModal" />
+        <div class="modal-btns">
+          <button @click="cancelModal">取消</button>
+          <button @click="confirmModal">确定</button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -294,4 +331,9 @@ textarea { resize: vertical; }
 .comments .at { color: #aaa; font-size: 12px; margin-left: 8px; }
 .add-comment { display: flex; gap: 8px; margin-top: 8px; }
 .add-comment input { flex: 1; padding: 6px 10px; }
+.modal-mask { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.modal { background: #fff; border-radius: 8px; padding: 16px; width: min(420px, 90vw); display: flex; flex-direction: column; gap: 10px; }
+.modal-msg { margin: 0; white-space: pre-wrap; font-size: 14px; }
+.modal input { padding: 8px 10px; }
+.modal-btns { display: flex; justify-content: flex-end; gap: 8px; }
 </style>
