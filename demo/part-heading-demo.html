@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>PART 色块标题复刻 demo</title>
+<style>body{background:#fff;padding:40px 20px;font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;} .wrap{max-width:677px;margin:0 auto;} label{color:#999;font-size:13px;margin:32px 0 8px;}</style>
+</head>
+<body>
+<div class="wrap">
+
+<label>① 1:1 复刻（截图原款：蓝块 + 绿横幅 + 黄底线 + 箭头）</label>
+
+<!-- 复刻开始：以下全部为内联样式，微信粘贴兼容 -->
+<section style="margin:24px 0;position:relative;">
+  <!-- 右上角箭头装饰 -->
+  <section style="position:absolute;right:0;top:-14px;font-size:16px;font-weight:bold;letter-spacing:2px;">
+    <span style="color:#8BC34A;">➤</span><span style="color:#C0CA33;">➤</span><span style="color:#8BC34A;">➤</span><span style="color:#FDD835;">➤</span>
+  </section>
+  <!-- 主体：左侧蓝色块 + 绿色横幅 -->
+  <section style="display:flex;align-items:stretch;">
+    <!-- 蓝色块：PART 白底黑字 + FOUR 白字 -->
+    <section style="flex-shrink:0;background:#1872F9;border-radius:6px 0 0 6px;padding:10px 14px;text-align:center;">
+      <section style="background:#ffffff;border-radius:3px;padding:1px 8px;margin-bottom:4px;">
+        <span style="font-size:13px;font-weight:bold;color:#1872F9;letter-spacing:1px;">PART</span>
+      </section>
+      <span style="font-size:22px;font-weight:900;color:#ffffff;font-style:italic;letter-spacing:1px;">FOUR</span>
+    </section>
+    <!-- 绿色横幅：中文标题 -->
+    <section style="flex-grow:1;background:#7AC143;border-radius:0 6px 6px 0;padding:14px 20px;display:flex;align-items:center;border-left:6px solid #5E9E2E;">
+      <span style="font-size:20px;font-weight:bold;color:#ffffff;letter-spacing:2px;">新学期的宿舍生活</span>
+    </section>
+  </section>
+  <!-- 黄色底线 -->
+  <section style="margin-top:6px;height:6px;background:#FDD835;border-radius:3px;"></section>
+  <section style="margin-top:3px;height:2px;background:#E0E0E0;"></section>
+</section>
+<!-- 复刻结束 -->
+
+<label>② 同构换色验证（主题可配置：活动橙）</label>
+
+<section style="margin:24px 0;position:relative;">
+  <section style="position:absolute;right:0;top:-14px;font-size:16px;font-weight:bold;letter-spacing:2px;">
+    <span style="color:#FFA726;">➤</span><span style="color:#FF7043;">➤</span><span style="color:#FFA726;">➤</span><span style="color:#FFB300;">➤</span>
+  </section>
+  <section style="display:flex;align-items:stretch;">
+    <section style="flex-shrink:0;background:#F4511E;border-radius:6px 0 0 6px;padding:10px 14px;text-align:center;">
+      <section style="background:#ffffff;border-radius:3px;padding:1px 8px;margin-bottom:4px;">
+        <span style="font-size:13px;font-weight:bold;color:#F4511E;letter-spacing:1px;">PART</span>
+      </section>
+      <span style="font-size:22px;font-weight:900;color:#ffffff;font-style:italic;letter-spacing:1px;">ONE</span>
+    </section>
+    <section style="flex-grow:1;background:#FF9800;border-radius:0 6px 6px 0;padding:14px 20px;display:flex;align-items:center;border-left:6px solid #E65100;">
+      <span style="font-size:20px;font-weight:bold;color:#ffffff;letter-spacing:2px;">迎新晚会全记录</span>
+    </section>
+  </section>
+  <section style="margin-top:6px;height:6px;background:#FFB300;border-radius:3px;"></section>
+  <section style="margin-top:3px;height:2px;background:#E0E0E0;"></section>
+</section>
+
+<label>③ 学院蓝主题</label>
+
+<section style="margin:24px 0;position:relative;">
+  <section style="position:absolute;right:0;top:-14px;font-size:16px;font-weight:bold;letter-spacing:2px;">
+    <span style="color:#42A5F5;">➤</span><span style="color:#1E88E5;">➤</span><span style="color:#42A5F5;">➤</span><span style="color:#90CAF9;">➤</span>
+  </section>
+  <section style="display:flex;align-items:stretch;">
+    <section style="flex-shrink:0;background:#1565C0;border-radius:6px 0 0 6px;padding:10px 14px;text-align:center;">
+      <section style="background:#ffffff;border-radius:3px;padding:1px 8px;margin-bottom:4px;">
+        <span style="font-size:13px;font-weight:bold;color:#1565C0;letter-spacing:1px;">PART</span>
+      </section>
+      <span style="font-size:22px;font-weight:900;color:#ffffff;font-style:italic;letter-spacing:1px;">TWO</span>
+    </section>
+    <section style="flex-grow:1;background:#1E88E5;border-radius:0 6px 6px 0;padding:14px 20px;display:flex;align-items:center;border-left:6px solid #0D47A1;">
+      <span style="font-size:20px;font-weight:bold;color:#ffffff;letter-spacing:2px;">返校时间与交通指南</span>
+    </section>
+  </section>
+  <section style="margin-top:6px;height:6px;background:#90CAF9;border-radius:3px;"></section>
+  <section style="margin-top:3px;height:2px;background:#E0E0E0;"></section>
+</section>
+
+</div>
+</body>
+</html>
