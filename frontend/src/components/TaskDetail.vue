@@ -174,6 +174,31 @@ async function addComment() {
   }
 }
 
+// ========== 秀米导出 ==========
+
+// 一键复制：标题/摘要/正文拼接为纯文本，粘贴到秀米后按段排版
+async function copyForXiumi() {
+  error.value = '';
+  const text = [title.value, summary.value, content.value].filter(Boolean).join('\n\n');
+  if (!text.trim()) {
+    error.value = '没有可导出的内容';
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    error.value = '已复制！去秀米 Ctrl+V 粘贴，按段套模板即可';
+  } catch {
+    // 剪贴板 API 不可用时降级：选中全文让用户 Ctrl+C
+    const el = document.createElement('textarea');
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    el.remove();
+    error.value = '已复制！去秀米 Ctrl+V 粘贴，按段套模板即可';
+  }
+}
+
 // 拉最新任务数据（含 comments），通过 refresh 事件链同步
 async function emitRefreshAndGet() {
   emit('refresh');
@@ -215,6 +240,7 @@ async function emitRefreshAndGet() {
     <div class="toolbar">
       <button :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
       <button :disabled="saving" @click="runCheck">规范检查</button>
+      <button @click="copyForXiumi">复制到秀米</button>
       <span v-if="savedAt" class="saved">已保存 {{ savedAt }}</span>
     </div>
 
