@@ -22,20 +22,30 @@ const PROVIDERS = {
   },
 };
 
-// 单供应商调用：OpenAI 兼容格式
+// 单供应商调用：OpenAI 兼容格式（55 秒超时，防止上游挂起导致请求无限等待）
 async function callOne(provider, messages) {
-  const res = await fetch(`${provider.baseURL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${provider.key}`,
-    },
-    body: JSON.stringify({
-      model: provider.model,
-      messages,
-      temperature: 0.7,
-    }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 55_000);
+  let res;
+  try {
+    res = await fetch(`${provider.baseURL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${provider.key}`,
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        messages,
+        temperature: 0.7,
+      }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    throw new Error(`${provider.label} ${e.name === 'AbortError' ? '请求超时（55秒）' : '网络错误：' + e.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${provider.label} 接口错误 ${res.status}: ${text.slice(0, 200)}`);
