@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "scripts": {
+    "test": "node --test tests/rules-engine.test.mjs"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4"
   }

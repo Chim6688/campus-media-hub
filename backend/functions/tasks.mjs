@@ -71,10 +71,16 @@ export default async (req) => {
           { status: 400, headers },
         );
       }
-      // TODO(Task 5): 接入门禁（推进到 reviewing 前必须过规范检查）
-      // rules-engine.mjs 在 Task 5 才创建，当前对流转到 reviewing 临时直接放行
+      // 门禁：推进到 reviewing 前必须过规范检查
       if (body.status === 'reviewing') {
-        // 临时放行：Task 5 将在此调用 runChecks 并拦截不合规文稿
+        const { runChecks } = await import('./lib/rules-engine.mjs');
+        const report = await runChecks(db, { ...task, ...patch });
+        if (report.errors.length > 0) {
+          return new Response(
+            JSON.stringify({ error: '规范检查未通过，请按整改清单修改', report }),
+            { status: 400, headers },
+          );
+        }
       }
       patch.status = body.status;
     }

@@ -131,6 +131,56 @@ async function rewriteSelection() {
     error.value = e.message;
   }
 }
+
+// ========== 规范检查 ==========
+
+const report = ref(null);
+
+// 先保存最新内容再检查，保证检查的是当前编辑态
+async function runCheck() {
+  error.value = '';
+  try {
+    await save();
+    const data = await request('/api/check', {
+      method: 'POST',
+      body: JSON.stringify({ taskId: props.task.id }),
+    });
+    report.value = data.report;
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+// ========== 审核批注 ==========
+
+const commentText = ref('');
+
+// 提交批注：任何状态可加（写作者留言/审核人批注）
+async function addComment() {
+  if (!commentText.value.trim()) return;
+  error.value = '';
+  try {
+    await request('/api/tasks', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        id: props.task.id,
+        comment: { by: localStorage.getItem('authorName') || '匿名', text: commentText.value.trim() },
+      }),
+    });
+    commentText.value = '';
+    await emitRefreshAndGet(); // 重新拉取任务展示最新批注
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+// 拉最新任务数据（含 comments），通过 refresh 事件链同步
+async function emitRefreshAndGet() {
+  emit('refresh');
+  const data = await request('/api/tasks');
+  const fresh = data.tasks.find((t) => t.id === props.task.id);
+  if (fresh) Object.assign(props.task, fresh);
+}
 </script>
 
 <template>
@@ -164,7 +214,33 @@ async function rewriteSelection() {
 
     <div class="toolbar">
       <button :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+      <button :disabled="saving" @click="runCheck">规范检查</button>
       <span v-if="savedAt" class="saved">已保存 {{ savedAt }}</span>
+    </div>
+
+    <!-- 检查报告：可行动的整改清单 -->
+    <div v-if="report" class="report" :class="report.passed ? 'ok' : 'fail'">
+      <p>{{ report.passed ? '检查通过，可推进到审核' : '存在 ' + report.errors.length + ' 个必须整改项' }}</p>
+      <ul v-if="report.errors.length">
+        <li v-for="(i, n) in report.errors" :key="'e' + n" class="err">【必须】{{ i.message }} —— {{ i.hint }}</li>
+      </ul>
+      <ul v-if="report.warnings.length">
+        <li v-for="(i, n) in report.warnings" :key="'w' + n" class="warn">【建议】{{ i.message }} —— {{ i.hint }}</li>
+      </ul>
+    </div>
+
+    <!-- 批注区：写作者留言/审核人批注 -->
+    <div class="comments">
+      <h3>批注（{{ (task.comments || []).length }}）</h3>
+      <ul>
+        <li v-for="(c, n) in task.comments" :key="n">
+          <b>{{ c.by }}</b>：{{ c.text }}<span class="at">{{ (c.at || '').slice(5, 16).replace('T', ' ') }}</span>
+        </li>
+      </ul>
+      <div class="add-comment">
+        <input v-model="commentText" placeholder="留言/批注，如：第二段数据请核实" @keyup.enter="addComment" />
+        <button @click="addComment">提交</button>
+      </div>
     </div>
   </section>
 </template>
@@ -180,4 +256,16 @@ textarea { resize: vertical; }
 .ai-toolbar { display: flex; gap: 8px; margin-top: 4px; }
 .ai-toolbar button { padding: 6px 12px; }
 .error { color: #c0392b; white-space: pre-wrap; margin: 0; }
+.report { margin-top: 12px; padding: 12px; border-radius: 6px; font-size: 14px; }
+.report.ok { background: #eafaf1; }
+.report.fail { background: #fdecea; }
+.report ul { margin: 8px 0 0; padding-left: 18px; }
+.report .err { color: #c0392b; }
+.report .warn { color: #b7791f; }
+.comments { margin-top: 24px; border-top: 1px solid #eee; padding-top: 12px; }
+.comments ul { list-style: none; padding: 0; }
+.comments li { padding: 6px 0; border-bottom: 1px dashed #f0f0f0; }
+.comments .at { color: #aaa; font-size: 12px; margin-left: 8px; }
+.add-comment { display: flex; gap: 8px; margin-top: 8px; }
+.add-comment input { flex: 1; padding: 6px 10px; }
 </style>
