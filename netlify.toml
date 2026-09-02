@@ -1,7 +1,8 @@
 [build]
   publish = "frontend/dist"
   functions = "backend/functions"
-  command = "cd frontend && npm run build"
+  # 根目录无 package.json，需显式安装 frontend 依赖（backend/functions 的依赖 Netlify 会按其 package.json 自动安装）
+  command = "cd frontend && npm install && npm run build"
 
 # 前端统一通过 /api/* 访问后端函数
 [[redirects]]
