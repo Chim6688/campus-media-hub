@@ -53,6 +53,14 @@ export default async (req) => {
     for (const f of ['content', 'title', 'summary']) {
       if (typeof body[f] === 'string') patch[f] = body[f];
     }
+    // 素材：结构化对象（AI 提取 + 人工补充）直接更新
+    if (body.material && typeof body.material === 'object' && !Array.isArray(body.material)) {
+      patch.material = body.material;
+    }
+    // 生成只读分享 token（P1-7：/share/:token 免口令查看）
+    if (body.generateShare) {
+      patch.share_token = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+    }
     // 批注：追加而非覆盖
     if (body.comment) {
       patch.comments = [

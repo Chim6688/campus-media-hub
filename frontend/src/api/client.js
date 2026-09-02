@@ -18,3 +18,22 @@ export async function request(path, options = {}) {
   }
   return data;
 }
+
+// PDF 上传（multipart）：不设 Content-Type，浏览器自动加 boundary
+export async function uploadPDF(path, file) {
+  const code = localStorage.getItem('accessCode') || '';
+  const formData = new FormData();
+  formData.append('pdf', file);
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'X-Access-Code': code },
+    body: formData,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `上传失败（${res.status}）`);
+    err.detail = data;
+    throw err;
+  }
+  return data;
+}

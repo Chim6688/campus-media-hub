@@ -9,3 +9,9 @@
   from = "/api/*"
   to = "/.netlify/functions/:splat"
   status = 200
+
+# 只读分享链接 SPA 路由（/share/:token 刷新不 404）
+[[redirects]]
+  from = "/share/*"
+  to = "/index.html"
+  status = 200
