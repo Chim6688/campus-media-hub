@@ -46,3 +46,14 @@ end $$;
 drop trigger if exists tasks_touch on tasks;
 create trigger tasks_touch before update on tasks
 for each row execute function touch_updated_at();
+
+-- ========== v2 增量迁移（幂等，可重复执行） ==========
+
+-- AI 从策划书提取的结构化素材：{name, time, location, target, highlights[], flow[], meaning}
+alter table tasks add column if not exists material jsonb not null default '{}';
+
+-- 只读分享链接的随机 token（null = 未生成分享链接，/share/:token 免口令只读）
+alter table tasks add column if not exists share_token text;
+
+-- 旧数据迁移：四态 → 三态（"排版中"任务视为还在写稿）
+update tasks set status = 'writing' where status = 'typesetting';

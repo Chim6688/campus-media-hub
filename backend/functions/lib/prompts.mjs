@@ -48,4 +48,59 @@ xxx`,
 ${p.selection}`,
     },
   ],
+  // 策划书素材提取：PDF文本 → 结构化 JSON（parse-pdf.mjs 调用）
+  extract_material: (p) => [
+    { role: 'system', content: '你是高校学院融媒体中心的编辑助理，擅长从活动策划书中提取写推文所需的关键信息。' },
+    {
+      role: 'user',
+      content: `从以下活动策划书文本中提取关键信息，严格按 JSON 格式输出，不要输出任何其他文字：
+要求字段：
+- name: 活动名称（简短）
+- time: 活动时间
+- location: 活动地点
+- target: 参与对象
+- highlights: 活动亮点（数组，3-6 条，每条一句话）
+- flow: 活动流程（数组，按顺序列出主要环节，每条简短）
+- meaning: 活动意义/背景（1-2 句话）
+
+策划书文本：
+${p.text.slice(0, 6000)}
+
+输出严格 JSON，不要 markdown 代码块包裹。`,
+    },
+  ],
+  // 一键成稿：结构化素材 + 现场补充 → 完整初稿（含手账卡片模板所需的 Markdown 结构约定）
+  draft_from_material: (p) => [
+    { role: 'system', content: SYSTEM },
+    {
+      role: 'user',
+      content: `请为学院公众号写一篇【${p.type || '活动报道'}】推文。
+
+活动信息：
+- 活动名称：${p.material?.name || p.theme}
+- 时间：${p.material?.time || '（待补充）'}
+- 地点：${p.material?.location || '（待补充）'}
+- 参与对象：${p.material?.target || '（待补充）'}
+
+活动亮点：
+${(p.material?.highlights || []).map((h, i) => `${i + 1}. ${h}`).join('\n')}
+
+活动流程：
+${(p.material?.flow || []).map((f, i) => `${i + 1}. ${f}`).join('\n')}
+
+活动意义：${p.material?.meaning || ''}
+
+现场补充亮点/素材：${p.liveNotes || '（无补充，请基于以上信息合理展开）'}
+照片说明（用于配图占位）：${p.photoNotes || '（无）'}
+
+篇幅：600-900 字。
+正文必须按以下 Markdown 结构约定输出（供手账卡片风模板渲染）：
+- 正文开头用 1-3 句引导性金句（将被渲染为引言卡）
+- 用 ## 划分 2-4 个小节（如 ## 活动介绍、## 核心信息、## 活动流程；"核心信息"小节内逐行写时间/地点/名额等要点）
+- 段落之间用空行分隔，合适位置插入 [配图：说明] 占位
+- 文末输出署名行（编辑｜作者名）
+请严格按以下 JSON 格式输出（不要输出任何其他文字，不要用 markdown 代码块包裹）：
+{"title":"标题","summary":"摘要（50字内）","content":"正文内容（Markdown，含##小节/[配图：说明]占位/文末署名）"}`,
+    },
+  ],
 };

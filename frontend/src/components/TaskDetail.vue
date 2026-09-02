@@ -208,8 +208,9 @@ async function execRewrite(instruction) {
 
 // ========== 状态操作（详情页直接推进/打回，不必回列表） ==========
 
-const STATUS_TEXT = { writing: '写稿中', typesetting: '排版中', reviewing: '审核中', published: '已发布' };
-const FLOW = ['writing', 'typesetting', 'reviewing', 'published'];
+const STATUS_TEXT = { writing: '写稿中', reviewing: '审核中', published: '已发布' };
+// 三态工作流：writing → reviewing → published（v2 淘汰"排版中"）
+const FLOW = ['writing', 'reviewing', 'published'];
 // 下一状态（published 无下一态，不显示推进按钮）
 const nextStatus = computed(() => FLOW[FLOW.indexOf(props.task.status) + 1] || null);
 

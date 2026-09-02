@@ -3,7 +3,8 @@ import { requireAuth } from './lib/auth.mjs';
 import { getSupabase } from './lib/supabase.mjs';
 
 const headers = { 'Content-Type': 'application/json' };
-const STATUS_FLOW = ['writing', 'typesetting', 'reviewing', 'published'];
+// 三态工作流：写稿中 → 审核中 → 已发布（v2 淘汰"排版中"，排版由前端模板系统承担）
+const STATUS_FLOW = ['writing', 'reviewing', 'published'];
 
 export default async (req) => {
   const authErr = requireAuth(req);

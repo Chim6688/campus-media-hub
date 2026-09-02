@@ -11,7 +11,7 @@ const type = ref('活动报道');
 const error = ref('');
 
 const STATUS_TEXT = {
-  writing: '写稿中', typesetting: '排版中', reviewing: '审核中', published: '已发布',
+  writing: '写稿中', reviewing: '审核中', published: '已发布',
 };
 
 // 新建任务：成功后记住署名，刷新列表并直接进入详情编辑
@@ -35,9 +35,9 @@ async function createTask() {
   }
 }
 
-// 状态推进：相邻状态依次前进，由后端校验合法性
+// 状态推进：相邻状态依次前进，由后端校验合法性（三态：writing→reviewing→published）
 async function advance(t) {
-  const flow = ['writing', 'typesetting', 'reviewing', 'published'];
+  const flow = ['writing', 'reviewing', 'published'];
   const next = flow[flow.indexOf(t.status) + 1];
   error.value = '';
   try {
