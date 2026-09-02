@@ -3,8 +3,15 @@ export default async (req) => {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: '仅支持 POST' }), { status: 405 });
   }
+  const expected = process.env.ACCESS_CODE;
+  // 未配置口令时明确报错（不再有默认口令）
+  if (!expected) {
+    return new Response(JSON.stringify({ ok: false, error: '管理员未配置访问口令' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
   const { code } = await req.json();
-  const expected = process.env.ACCESS_CODE || 'demo2026'; // 本地开发默认值
   if (code === expected) {
     return new Response(JSON.stringify({ ok: true }), {
       headers: { 'Content-Type': 'application/json' },

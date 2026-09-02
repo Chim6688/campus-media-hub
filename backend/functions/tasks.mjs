@@ -85,6 +85,11 @@ export default async (req) => {
       patch.status = body.status;
     }
 
+    // 空补丁（如同状态重复推进）：幂等返回当前任务，避免空 update 导致 .single() 报错
+    if (!Object.keys(patch).length) {
+      return new Response(JSON.stringify({ task }), { headers });
+    }
+
     const { data, error } = await db.from('tasks').update(patch).eq('id', id).select().single();
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers });
     return new Response(JSON.stringify({ task: data }), { headers });

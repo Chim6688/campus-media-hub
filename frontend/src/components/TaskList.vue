@@ -14,7 +14,7 @@ const STATUS_TEXT = {
   writing: '写稿中', typesetting: '排版中', reviewing: '审核中', published: '已发布',
 };
 
-// 新建任务：成功后记住署名，刷新列表
+// 新建任务：成功后记住署名，刷新列表并直接进入详情编辑
 async function createTask() {
   error.value = '';
   if (!theme.value || !author.value) {
@@ -22,13 +22,14 @@ async function createTask() {
     return;
   }
   try {
-    await request('/api/tasks', {
+    const data = await request('/api/tasks', {
       method: 'POST',
       body: JSON.stringify({ theme: theme.value, type: type.value, author: author.value }),
     });
     localStorage.setItem('authorName', author.value);
     theme.value = '';
     emit('refresh');
+    emit('open', data.task); // 创建成功直接跳转详情页
   } catch (e) {
     error.value = e.message;
   }
@@ -38,6 +39,7 @@ async function createTask() {
 async function advance(t) {
   const flow = ['writing', 'typesetting', 'reviewing', 'published'];
   const next = flow[flow.indexOf(t.status) + 1];
+  error.value = '';
   try {
     await request('/api/tasks', {
       method: 'PATCH',
@@ -45,8 +47,14 @@ async function advance(t) {
     });
     emit('refresh');
   } catch (e) {
-    // 规范检查不通过时后端返回 {error, report}，这里只展示概要
-    error.value = e.message;
+    // 规范检查不通过时展示完整整改清单（必须项+建议项）
+    if (e.detail?.report) {
+      const errs = e.detail.report.errors.map((i) => `【必须】${i.message} —— ${i.hint}`);
+      const warns = e.detail.report.warnings.map((i) => `【建议】${i.message} —— ${i.hint}`);
+      error.value = [e.message, '', ...errs, ...warns].join('\n');
+    } else {
+      error.value = e.message;
+    }
   }
 }
 </script>

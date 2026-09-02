@@ -11,7 +11,10 @@ export async function request(path, options = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || `请求失败（${res.status}）`);
+    // 完整响应体挂到 error.detail：规范检查不通过时含 report 整改清单
+    const err = new Error(data.error || `请求失败（${res.status}）`);
+    err.detail = data;
+    throw err;
   }
   return data;
 }

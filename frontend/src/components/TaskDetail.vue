@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, nextTick, watch } from 'vue';
+import { ref, reactive, computed, nextTick, watch, onBeforeUnmount } from 'vue';
 import { request } from '../api/client.js';
 
 const props = defineProps({ task: Object });
@@ -38,17 +38,38 @@ function cancelModal() {
   modal.resolve?.(null);
 }
 
-// 切换任务时重置本地编辑态
+// 切换任务时重置本地编辑态（switching 标记避免重置触发自动保存）
+let switching = false;
 watch(() => props.task.id, () => {
+  switching = true;
   title.value = props.task.title || '';
   summary.value = props.task.summary || '';
   content.value = props.task.content || '';
+  if (saveTimer) clearTimeout(saveTimer);
+  nextTick(() => (switching = false));
 });
 
-// 保存文稿（防抖由手动触发，MVP 不做自动保存）
-async function save() {
+// ========== 自动保存（防抖 2 秒） ==========
+let saveTimer = null;
+const autoSaved = ref(false); // 区分"已自动保存"与手动"已保存"
+
+function scheduleAutoSave() {
+  if (switching) return; // 任务切换时的回填不触发保存
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => save(true), 2000);
+}
+
+watch([title, summary, content], scheduleAutoSave);
+
+onBeforeUnmount(() => {
+  if (saveTimer) clearTimeout(saveTimer);
+});
+
+// 保存文稿（isAuto=true 表示由防抖自动触发）
+async function save(isAuto = false) {
   saving.value = true;
   try {
+    ensureSignature(); // 双保险：保存时无署名则自动追加
     await request('/api/tasks', {
       method: 'PATCH',
       body: JSON.stringify({
@@ -59,9 +80,17 @@ async function save() {
       }),
     });
     savedAt.value = new Date().toLocaleTimeString();
+    autoSaved.value = isAuto;
     emit('refresh'); // 同步列表数据
   } finally {
     saving.value = false;
+  }
+}
+
+// 署名双保险：文末无"责编 | 姓名"格式时自动追加（规范检查硬性要求）
+function ensureSignature() {
+  if (content.value && !/责编\s*[|｜]\s*\S+/.test(content.value)) {
+    content.value = content.value.trimEnd() + `\n\n责编 | ${props.task.author}`;
   }
 }
 
@@ -98,28 +127,39 @@ async function generateDraft() {
     if (titleMatch) title.value = titleMatch[1].trim();
     if (summaryMatch) summary.value = summaryMatch[1].trim();
     if (bodyMatch) content.value = bodyMatch[1].trim();
+    ensureSignature(); // AI 初稿自动追加责编署名，避免用户忘记
     error.value = 'AI 初稿已生成，请检查后点"保存"';
   } catch (e) {
     error.value = e.message;
   }
 }
 
-// 生成 3 个候选标题，弹窗选择
+// 生成 3 个候选标题，按钮点选（不再手动输入序号）
+const titlePicker = reactive({ show: false, options: [] });
+
 async function generateTitles() {
   error.value = '';
   try {
     const text = await callAI('title', { title: title.value, content: content.value });
-    const chosen = await askUser(`选择一个标题（输入序号）\n${text}`);
-    if (!chosen) return;
-    const lines = text.split('\n').filter((l) => l.trim());
-    const idx = parseInt(chosen, 10) - 1;
-    if (lines[idx]) {
-      // 去掉"1. "之类的编号前缀
-      title.value = lines[idx].replace(/^\s*\d+[.、]\s*/, '').trim();
+    // 按行拆分、去掉"1. "编号前缀、过滤空行
+    titlePicker.options = text
+      .split('\n')
+      .map((l) => l.replace(/^\s*\d+[.、]\s*/, '').trim())
+      .filter(Boolean);
+    if (!titlePicker.options.length) {
+      error.value = 'AI 未返回有效标题，请重试';
+      return;
     }
+    titlePicker.show = true;
   } catch (e) {
     error.value = e.message;
   }
+}
+
+// 点选某个标题：填入标题框并关闭弹窗
+function pickTitle(t) {
+  title.value = t;
+  titlePicker.show = false;
 }
 
 // AI 生成摘要
@@ -132,29 +172,71 @@ async function generateSummary() {
   }
 }
 
-// 选中改写：对正文 textarea 当前选中文字执行改写指令
-async function rewriteSelection() {
+// 选中改写：快捷按钮 + 自定义指令（不再手动输入序号）
+const rewritePicker = reactive({ show: false, custom: '' });
+const rewritePresets = ['更口语化', '精简一点', '扩写细节', '更有数据感'];
+// 捕获选中上下文：弹窗操作后 textarea 失焦，提前记录选中区间更稳妥
+const rewriteCtx = { selection: '', start: 0, end: 0 };
+
+function rewriteSelection() {
   const el = contentRef.value;
-  const selection = el.value.slice(el.selectionStart, el.selectionEnd);
-  if (!selection) {
+  rewriteCtx.selection = el.value.slice(el.selectionStart, el.selectionEnd);
+  if (!rewriteCtx.selection) {
     error.value = '请先在正文中选中要改写的文字';
     return;
   }
-  const presets = ['更口语化', '精简一点', '扩写细节', '更有数据感'];
-  const input = await askUser('改写指令（或输入序号用快捷方向）\n1. 更口语化\n2. 精简一点\n3. 扩写细节\n4. 更有数据感');
-  if (!input) return;
-  const n = parseInt(input, 10);
-  const instruction = n >= 1 && n <= 4 ? presets[n - 1] : input;
+  rewriteCtx.start = el.selectionStart;
+  rewriteCtx.end = el.selectionEnd;
+  rewritePicker.custom = '';
+  rewritePicker.show = true;
+}
+
+// 执行改写并替换选中段（Ctrl+Z 可撤销）
+async function execRewrite(instruction) {
+  if (!instruction || !rewriteCtx.selection) return;
+  rewritePicker.show = false;
+  error.value = '';
   try {
-    const newText = await callAI('rewrite', { selection, instruction });
-    // 只替换选中段，其余不动；用户可用 Ctrl+Z 撤销（textarea 原生支持）
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    content.value = el.value.slice(0, start) + newText + el.value.slice(end);
+    const newText = await callAI('rewrite', { selection: rewriteCtx.selection, instruction });
+    const el = contentRef.value;
+    content.value = el.value.slice(0, rewriteCtx.start) + newText + el.value.slice(rewriteCtx.end);
     error.value = '已改写选中文字（Ctrl+Z 可撤销）';
   } catch (e) {
     error.value = e.message;
   }
+}
+
+// ========== 状态操作（详情页直接推进/打回，不必回列表） ==========
+
+const STATUS_TEXT = { writing: '写稿中', typesetting: '排版中', reviewing: '审核中', published: '已发布' };
+const FLOW = ['writing', 'typesetting', 'reviewing', 'published'];
+// 下一状态（published 无下一态，不显示推进按钮）
+const nextStatus = computed(() => FLOW[FLOW.indexOf(props.task.status) + 1] || null);
+
+// 状态变更：先保存最新内容（确保门禁检查当前编辑态），成功后刷新；失败展示完整整改清单
+async function changeStatus(next) {
+  error.value = '';
+  try {
+    await save();
+    const data = await request('/api/tasks', {
+      method: 'PATCH',
+      body: JSON.stringify({ id: props.task.id, status: next }),
+    });
+    Object.assign(props.task, data.task);
+    emit('refresh');
+  } catch (e) {
+    // 整改清单格式化：必须项+建议项逐条列出（P0-6 统一格式）
+    error.value = formatAdvanceError(e);
+  }
+}
+
+// 推进失败时把 report 整改清单拼进错误信息
+function formatAdvanceError(e) {
+  const detail = e.detail;
+  if (!detail?.report) return e.message;
+  const errs = detail.report.errors.map((i) => `【必须】${i.message} —— ${i.hint}`);
+  const warns = detail.report.warnings.map((i) => `【建议】${i.message} —— ${i.hint}`);
+  return [e.message, '', ...errs, ...warns].join('\n');
 }
 
 // ========== 规范检查 ==========
@@ -263,10 +345,17 @@ async function emitRefreshAndGet() {
     <p v-if="error" class="error">{{ error }}</p>
 
     <div class="toolbar">
-      <button :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+      <button :disabled="saving" @click="save()">{{ saving ? '保存中…' : '保存' }}</button>
       <button :disabled="saving" @click="runCheck">规范检查</button>
       <button @click="copyForXiumi">复制到秀米</button>
-      <span v-if="savedAt" class="saved">已保存 {{ savedAt }}</span>
+      <!-- 状态操作：按当前状态显示推进/打回 -->
+      <button v-if="nextStatus" class="status-btn" @click="changeStatus(nextStatus)">
+        推进为{{ STATUS_TEXT[nextStatus] }} →
+      </button>
+      <button v-if="task.status === 'reviewing'" class="status-btn reject" @click="changeStatus('writing')">
+        打回修改
+      </button>
+      <span v-if="savedAt" class="saved">{{ autoSaved ? '已自动保存' : '已保存' }} {{ savedAt }}</span>
     </div>
 
     <!-- 检查报告：可行动的整改清单 -->
@@ -305,6 +394,36 @@ async function emitRefreshAndGet() {
         </div>
       </div>
     </div>
+
+    <!-- 标题候选点选弹窗 -->
+    <div v-if="titlePicker.show" class="modal-mask" @click.self="titlePicker.show = false">
+      <div class="modal">
+        <p class="modal-title">选择一个标题</p>
+        <button v-for="(t, i) in titlePicker.options" :key="i" class="option-btn" @click="pickTitle(t)">
+          {{ t }}
+        </button>
+        <div class="modal-btns">
+          <button @click="titlePicker.show = false">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 改写指令弹窗：快捷按钮 + 自定义输入 -->
+    <div v-if="rewritePicker.show" class="modal-mask" @click.self="rewritePicker.show = false">
+      <div class="modal">
+        <p class="modal-title">改写选中的文字</p>
+        <div class="preset-grid">
+          <button v-for="p in rewritePresets" :key="p" class="option-btn" @click="execRewrite(p)">
+            {{ p }}
+          </button>
+        </div>
+        <input v-model="rewritePicker.custom" placeholder="或输入自定义改写要求" @keyup.enter="execRewrite(rewritePicker.custom)" />
+        <div class="modal-btns">
+          <button @click="rewritePicker.show = false">取消</button>
+          <button @click="execRewrite(rewritePicker.custom)">执行</button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -336,4 +455,10 @@ textarea { resize: vertical; }
 .modal-msg { margin: 0; white-space: pre-wrap; font-size: 14px; }
 .modal input { padding: 8px 10px; }
 .modal-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-title { margin: 0; font-size: 14px; font-weight: 600; }
+.option-btn { text-align: left; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa; cursor: pointer; }
+.option-btn:hover { border-color: #1e88e5; background: #eef6fd; }
+.preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.status-btn { padding: 6px 12px; background: #1e88e5; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+.status-btn.reject { background: #e67e22; }
 </style>
