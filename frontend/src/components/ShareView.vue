@@ -37,6 +37,15 @@ onMounted(async () => {
     <template v-else>
       <!-- 渲染排版效果（与作者编辑页预览一致） -->
       <div class="article" v-html="html"></div>
+      <!-- 整改清单进度（只读展示，老师可看到整改情况；插值渲染无 XSS 风险） -->
+      <div v-if="task.review_checklist?.length" class="checklist">
+        <h3>整改清单（{{ task.review_checklist.filter((i) => i.done).length }}/{{ task.review_checklist.length }} 已完成）</h3>
+        <ul>
+          <li v-for="item in task.review_checklist" :key="item.id" :class="{ done: item.done }">
+            {{ item.done ? '☑' : '☐' }} {{ item.text }}
+          </li>
+        </ul>
+      </div>
       <p class="meta">作者：{{ task.author }} · 审阅请通过微信联系作者</p>
     </template>
   </section>
@@ -48,4 +57,10 @@ onMounted(async () => {
 .hint.error { color: #c0392b; }
 .article { border-radius: 8px; overflow: hidden; }
 .meta { color: #999; font-size: 13px; text-align: center; }
+/* 整改清单进度（只读）：与作者端清单区同风格 */
+.checklist { border: 1px solid #e6d9c8; border-radius: 8px; padding: 10px 14px; background: #fdf9f2; }
+.checklist h3 { margin: 0 0 8px; font-size: 14px; }
+.checklist ul { list-style: none; padding: 0; margin: 0; }
+.checklist li { padding: 4px 0; font-size: 14px; }
+.checklist li.done { color: #999; text-decoration: line-through; }
 </style>

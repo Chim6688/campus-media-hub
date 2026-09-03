@@ -3,6 +3,7 @@ import { ref, reactive, computed, nextTick, watch, onBeforeUnmount } from 'vue';
 import { request, uploadPDF } from '../api/client.js';
 import { markdownToWechatHTML, markdownToPlainText } from '../utils/wechat-format.js';
 import { THEMES } from '../utils/themes.js';
+import { normalizeLines, makeItem } from '../utils/checklist.mjs'; // 整改清单纯函数（与后端双份同步）
 
 const props = defineProps({ task: Object });
 const emit = defineEmits(['back', 'refresh']);
@@ -161,6 +162,8 @@ watch(() => props.task.id, () => {
   themeId.value = props.task.theme?.id || localStorage.getItem('themeId') || 'greenPink';
   for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
   Object.assign(themeOverrides, props.task.theme?.overrides || {});
+  // 整改清单回填：旧任务无清单 → 空数组（不阻塞推进）
+  checklist.value = Array.isArray(props.task.review_checklist) ? [...props.task.review_checklist] : [];
   if (saveTimer) clearTimeout(saveTimer);
   nextTick(() => (switching = false));
 });
@@ -360,6 +363,61 @@ function formatAdvanceError(e) {
   const errs = detail.report.errors.map((i) => `【必须】${i.message} —— ${i.hint}`);
   const warns = detail.report.warnings.map((i) => `【建议】${i.message} —— ${i.hint}`);
   return [e.message, '', ...errs, ...warns].join('\n');
+}
+
+// ========== 整改清单（P0-2：打回绑定清单，清零才能推回审核） ==========
+// 本地清单副本：勾销即时反映，整表 PATCH 持久化（模式同 material）
+const checklist = ref(Array.isArray(props.task.review_checklist) ? [...props.task.review_checklist] : []);
+// 打回弹窗状态：input 为多行录入框（手动逐行 / 粘贴老师留言后 AI 整理）
+const rejectModal = reactive({ show: false, input: '', loading: false });
+
+// 未完成条数：>0 时推进按钮置灰（体验层提示，后端 400 才是真门禁）
+const checklistRemaining = computed(() => checklist.value.filter((i) => !i.done).length);
+
+// 打回：弹窗录入清单（手动逐条 / 粘贴老师留言 AI 整理）
+function openRejectModal() {
+  rejectModal.show = true;
+  rejectModal.input = '';
+}
+
+// AI 整理：粘贴的老师微信留言 → 逐条意见（整理后仍可手动增删改）
+async function aiOrganizeNotes() {
+  if (!rejectModal.input.trim()) return;
+  rejectModal.loading = true;
+  try {
+    const text = await callAI('organize_review_notes', { text: rejectModal.input });
+    // 剥离可能的代码块包裹后按 JSON 数组解析
+    const arr = JSON.parse(text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim());
+    if (Array.isArray(arr) && arr.length) rejectModal.input = arr.join('\n');
+    else error.value = 'AI 未识别出意见，请手动逐行录入';
+  } catch (e) {
+    error.value = 'AI 整理失败，请手动逐行录入：' + e.message;
+  } finally {
+    rejectModal.loading = false;
+  }
+}
+
+// 确认打回：录入内容归一化 → 清单条目，清单与状态一起 PATCH（空录入沿用现有清单，同旧打回行为）
+async function confirmReject() {
+  const lines = normalizeLines(rejectModal.input);
+  const items = lines.length ? lines.map(makeItem) : checklist.value; // 允许空清单直接打回（同现状）
+  rejectModal.show = false;
+  checklist.value = items;
+  await request('/api/tasks', {
+    method: 'PATCH',
+    body: JSON.stringify({ id: props.task.id, review_checklist: items, status: 'writing' }),
+  });
+  Object.assign(props.task, { review_checklist: items, status: 'writing' });
+  emit('refresh');
+}
+
+// 勾销/恢复某条：翻转 done 后整表 PATCH 持久化
+async function toggleChecklistItem(item) {
+  item.done = !item.done;
+  await request('/api/tasks', {
+    method: 'PATCH',
+    body: JSON.stringify({ id: props.task.id, review_checklist: checklist.value }),
+  });
 }
 
 // ========== 规范检查 ==========
@@ -619,10 +677,13 @@ async function emitRefreshAndGet() {
       <button :disabled="saving" @click="save()">{{ saving ? '保存中…' : '保存' }}</button>
       <button :disabled="saving" @click="runCheck">规范检查</button>
       <!-- 状态操作：按当前状态显示推进/打回 -->
-      <button v-if="nextStatus" class="status-btn" @click="changeStatus(nextStatus)">
+      <!-- 推回审核受整改清单门禁：有未完成条目时置灰（体验层，后端 400 为真门禁） -->
+      <button v-if="nextStatus" class="status-btn" :disabled="nextStatus === 'reviewing' && checklistRemaining > 0"
+        :title="nextStatus === 'reviewing' && checklistRemaining > 0 ? `整改清单还剩 ${checklistRemaining} 条` : ''"
+        @click="changeStatus(nextStatus)">
         推进为{{ STATUS_TEXT[nextStatus] }} →
       </button>
-      <button v-if="task.status === 'reviewing'" class="status-btn reject" @click="changeStatus('writing')">
+      <button v-if="task.status === 'reviewing'" class="status-btn reject" @click="openRejectModal">
         打回修改
       </button>
       <button v-if="task.status !== 'published'" class="status-btn share" @click="generateShareLink">
@@ -645,6 +706,20 @@ async function emitRefreshAndGet() {
       <ul v-if="report.warnings.length">
         <li v-for="(i, n) in report.warnings" :key="'w' + n" class="warn">【建议】{{ i.message }} —— {{ i.hint }}</li>
       </ul>
+    </div>
+
+    <!-- 整改清单：打回时生成，逐条勾销，清零才能推回审核（仅写稿中且有清单时显示） -->
+    <div v-if="checklist.length && task.status === 'writing'" class="checklist">
+      <h3>整改清单（剩 {{ checklistRemaining }}/{{ checklist.length }}）</h3>
+      <ul>
+        <li v-for="item in checklist" :key="item.id" :class="{ done: item.done }">
+          <label>
+            <input type="checkbox" :checked="item.done" @change="toggleChecklistItem(item)" />
+            {{ item.text }}
+          </label>
+        </li>
+      </ul>
+      <p v-if="checklistRemaining === 0" class="checklist-ok">✓ 全部完成，可推进到审核</p>
     </div>
 
     <!-- 批注区：写作者留言/审核人批注 -->
@@ -699,6 +774,21 @@ async function emitRefreshAndGet() {
         <div class="modal-btns">
           <button @click="rewritePicker.show = false">取消</button>
           <button @click="execRewrite(rewritePicker.custom)">执行</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 打回弹窗：手动逐行 / 粘贴老师留言 AI 整理（P0-2） -->
+    <div v-if="rejectModal.show" class="modal-mask" @click.self="rejectModal.show = false">
+      <div class="modal">
+        <p class="modal-title">打回修改 · 录入整改清单</p>
+        <textarea v-model="rejectModal.input" rows="6" placeholder="每行一条整改项；或粘贴老师微信留言后点「AI 整理」"></textarea>
+        <div class="modal-btns">
+          <button @click="rejectModal.show = false">取消</button>
+          <button :disabled="rejectModal.loading" @click="aiOrganizeNotes">
+            {{ rejectModal.loading ? '整理中…' : '✨ AI 整理' }}
+          </button>
+          <button class="primary" @click="confirmReject">打回并生成清单</button>
         </div>
       </div>
     </div>
@@ -790,4 +880,14 @@ textarea { resize: vertical; }
 .param-row input[type='color'] { width: 40px; height: 26px; padding: 0; border: 1px solid #ddd; border-radius: 4px; }
 .param-val { font-size: 12px; color: #999; width: 48px; text-align: right; }
 .param-reset { grid-column: 1 / -1; font-size: 12px; color: #999; }
+
+/* 整改清单（P0-2）：打回生成的待勾销条目区 */
+.checklist { border: 1px solid #e6d9c8; border-radius: 8px; padding: 10px 14px; background: #fdf9f2; }
+.checklist h3 { margin: 0 0 8px; font-size: 14px; }
+.checklist ul { list-style: none; padding: 0; margin: 0; }
+.checklist li { padding: 4px 0; font-size: 14px; }
+.checklist li.done { color: #999; text-decoration: line-through; }
+.checklist-ok { color: #27ae60; font-size: 13px; margin: 6px 0 0; }
+/* 打回弹窗主按钮：与打回按钮同色系（橙） */
+.modal-btns .primary { background: #e67e22; color: #fff; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
 </style>

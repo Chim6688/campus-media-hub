@@ -1,6 +1,7 @@
 // 任务 CRUD：Supabase 持久化 + 口令校验 + 状态流转门禁
 import { requireAuth } from './lib/auth.mjs';
 import { getSupabase } from './lib/supabase.mjs';
+import { remainingCount } from './lib/checklist.mjs';
 
 const headers = { 'Content-Type': 'application/json' };
 // 三态工作流：写稿中 → 审核中 → 已发布（v2 淘汰"排版中"，排版由前端模板系统承担）
@@ -61,6 +62,8 @@ export default async (req) => {
     if (body.theme && typeof body.theme === 'object' && !Array.isArray(body.theme)) {
       patch.theme = { id: String(body.theme.id || ''), overrides: body.theme.overrides || {} };
     }
+    // 整改清单（P0-2：整体更新，模式同 material）
+    if (Array.isArray(body.review_checklist)) patch.review_checklist = body.review_checklist;
     // 生成只读分享 token（P1-7：/share/:token 免口令查看）
     if (body.generateShare) {
       patch.share_token = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
@@ -86,6 +89,14 @@ export default async (req) => {
       }
       // 门禁：推进到 reviewing 前必须过规范检查
       if (body.status === 'reviewing') {
+        // 门禁2：整改清单未清零禁止推回审核（清单为空=旧任务/未打回，放行）
+        const undone = remainingCount(patch.review_checklist ?? task.review_checklist);
+        if (undone > 0) {
+          return new Response(
+            JSON.stringify({ error: `整改清单还有 ${undone} 条未完成，全部勾销后才能推回审核` }),
+            { status: 400, headers },
+          );
+        }
         const { runChecks } = await import('./lib/rules-engine.mjs');
         const report = await runChecks(db, { ...task, ...patch });
         if (report.errors.length > 0) {
