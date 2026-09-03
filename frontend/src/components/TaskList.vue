@@ -73,6 +73,20 @@ async function advance(t) {
     }
   }
 }
+// P2-6：一键复用已发布任务（素材+排版主题继承，成稿清空），成功后直接进入新任务编辑
+async function reuseTask(t) {
+  error.value = '';
+  try {
+    const data = await request('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ copyFrom: t.id }),
+    });
+    emit('refresh');
+    emit('open', data.task); // 直接跳进新任务详情页
+  } catch (e) {
+    error.value = e.message;
+  }
+}
 </script>
 
 <template>
@@ -106,6 +120,10 @@ async function advance(t) {
         <button v-if="t.status !== 'published'" class="advance" @click.stop="advance(t)">
           推进 →
         </button>
+        <!-- 已发布任务：一键复用为新任务（同主题同类型快速再产出） -->
+        <button v-if="t.status === 'published'" class="reuse" @click.stop="reuseTask(t)">
+          ♻️ 复用为新任务
+        </button>
       </li>
     </ul>
     <!-- 空态区分：列表本身为空 vs 筛选条件无命中 -->
@@ -124,6 +142,7 @@ async function advance(t) {
 .task-list .title { flex: 1; }
 .task-list .meta { color: #888; font-size: 13px; }
 .advance { padding: 4px 10px; }
+.reuse { padding: 4px 10px; font-size: 12px; }
 .error { color: #c0392b; white-space: pre-wrap; }
 .empty { color: #999; }
 /* 筛选区：状态 Tab 胶囊 + 类型下拉 + 关键词搜索（P1-5） */

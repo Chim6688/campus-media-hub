@@ -2,6 +2,7 @@
 import { requireAuth } from './lib/auth.mjs';
 import { getSupabase } from './lib/supabase.mjs';
 import { remainingCount } from './lib/checklist.mjs';
+import { buildReuseInsert } from './lib/reuse.mjs';
 
 const headers = { 'Content-Type': 'application/json' };
 // 三态工作流：写稿中 → 审核中 → 已发布（v2 淘汰"排版中"，排版由前端模板系统承担）
@@ -22,9 +23,19 @@ export default async (req) => {
     return new Response(JSON.stringify({ tasks: data }), { headers });
   }
 
-  // POST：新建任务
+  // POST：新建任务（支持 copyFrom 一键复用已发布任务）
   if (req.method === 'POST') {
-    const { theme, type, author } = await req.json();
+    const { theme, type, author, copyFrom } = await req.json();
+    // P2-6：一键复用——继承素材+排版主题，清空成稿，状态重置 writing
+    if (copyFrom) {
+      const { data: src, error: findErr } = await db.from('tasks').select('*').eq('id', copyFrom).single();
+      if (findErr || !src) {
+        return new Response(JSON.stringify({ error: '原任务不存在' }), { status: 404, headers });
+      }
+      const { data, error } = await db.from('tasks').insert(buildReuseInsert(src)).select().single();
+      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers });
+      return new Response(JSON.stringify({ task: data }), { status: 201, headers });
+    }
     if (!theme || !author) {
       return new Response(JSON.stringify({ error: 'theme 和 author 必填' }), { status: 400, headers });
     }
@@ -58,9 +69,12 @@ export default async (req) => {
     if (body.material && typeof body.material === 'object' && !Array.isArray(body.material)) {
       patch.material = body.material;
     }
-    // 排版主题（P0-1：皮肤 id + 令牌覆盖，随任务持久化供复用）
-    if (body.theme && typeof body.theme === 'object' && !Array.isArray(body.theme)) {
-      patch.theme = { id: String(body.theme.id || ''), overrides: body.theme.overrides || {} };
+    // 排版主题（P0-1/P2-6：皮肤 id + 令牌覆盖，随任务持久化供复用；v4 起独立列 layout_theme，不再撞推文主题）
+    if (body.layout_theme && typeof body.layout_theme === 'object' && !Array.isArray(body.layout_theme)) {
+      patch.layout_theme = {
+        id: String(body.layout_theme.id || ''),
+        overrides: body.layout_theme.overrides || {},
+      };
     }
     // 整改清单（P0-2：整体更新，模式同 material）
     if (Array.isArray(body.review_checklist)) patch.review_checklist = body.review_checklist;

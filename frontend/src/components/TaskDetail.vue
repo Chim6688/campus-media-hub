@@ -159,10 +159,10 @@ watch(() => props.task.id, () => {
   summary.value = props.task.summary || '';
   content.value = props.task.content || '';
   fillMaterial(props.task.material);
-  // 主题回填：皮肤 id 优先任务级 theme，无则回退全局记忆（在 switching 保护内，避免触发自动保存覆盖）
-  themeId.value = props.task.theme?.id || localStorage.getItem('themeId') || 'greenPink';
+  // 排版主题回填：优先任务级 layout_theme，无则回退全局记忆（在 switching 保护内，避免触发自动保存覆盖）
+  themeId.value = props.task.layout_theme?.id || localStorage.getItem('themeId') || 'greenPink';
   for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
-  Object.assign(themeOverrides, props.task.theme?.overrides || {});
+  Object.assign(themeOverrides, props.task.layout_theme?.overrides || {});
   // 整改清单回填：旧任务无清单 → 空数组（不阻塞推进）
   checklist.value = Array.isArray(props.task.review_checklist) ? [...props.task.review_checklist] : [];
   if (saveTimer) clearTimeout(saveTimer);
@@ -198,7 +198,7 @@ async function save(isAuto = false) {
       title: title.value,
       summary: summary.value,
       content: content.value,
-      theme: { id: themeId.value, overrides: { ...themeOverrides } }, // 排版主题随任务持久化（P0-1）
+      layout_theme: { id: themeId.value, overrides: { ...themeOverrides } }, // 排版主题随任务持久化（P2-6 起独立列，不撞推文主题）
     };
     if (hasMaterial()) body.material = materialPayload(); // 素材随文稿一起持久化
     await request('/api/tasks', {
@@ -477,10 +477,10 @@ async function addComment() {
 
 // ========== 微信排版预览 + 复制到公众号 ==========
 
-// 模板皮肤：任务级持久化（task.theme），无则回退 localStorage
-const themeId = ref(props.task.theme?.id || localStorage.getItem('themeId') || 'greenPink');
+// 模板皮肤：任务级持久化（task.layout_theme），无则回退 localStorage
+const themeId = ref(props.task.layout_theme?.id || localStorage.getItem('themeId') || 'greenPink');
 // 令牌覆盖：色板 + 圆角/字号/间距滑杆（滑杆 min/max 即 clamp 范围，防破坏性布局）
-const themeOverrides = reactive({ ...(props.task.theme?.overrides || {}) });
+const themeOverrides = reactive({ ...(props.task.layout_theme?.overrides || {}) });
 // 参数面板字段定义：type=color 为色板，type=range 为滑杆（值范围即 clamp）
 const OVERRIDES_SCHEMA = [
   { key: 'accentA', label: '强调色A', type: 'color' },

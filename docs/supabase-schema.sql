@@ -61,7 +61,31 @@ update tasks set status = 'writing' where status = 'typesetting';
 -- ========== v3 增量迁移（P0-1/P0-2/P2-6，幂等，可重复执行） ==========
 
 -- P0-1：排版主题（皮肤 id + 令牌覆盖），null = 未自定义（用全局默认）
+-- ⚠️ 此条已废弃：theme 列名与 v1 建表的推文主题 text 撞名，if not exists 静默跳过；
+-- 排版主题改由 v4 段的 layout_theme 列承担（见 v4 修复说明）
 alter table tasks add column if not exists theme jsonb;
 
 -- P0-2：整改清单 [{id, text, done, at}]，默认空数组（旧任务不阻塞流转）
 alter table tasks add column if not exists review_checklist jsonb not null default '[]';
+
+-- ========== v4 增量迁移（P2-6 排版主题字段分离修复，幂等，可重复执行） ==========
+-- 修复说明：v3 想建的排版主题列 theme jsonb 与 v1 的推文主题 theme text 撞名，
+-- add column if not exists 静默跳过导致列未建成；PostgREST 把排版主题对象
+-- 字符串化写入 theme text 列，覆盖了推文主题。本段分离到独立列 layout_theme。
+
+-- P2-6：排版主题独立列（{id, overrides}），null = 未自定义（用全局默认/ localStorage 回退）
+alter table tasks add column if not exists layout_theme jsonb;
+
+-- 安全 JSON 转换：非法 JSON 返回 null 而非报错（数据修复容错用，幂等）
+create or replace function try_jsonb(t text) returns jsonb language plpgsql immutable as $$
+begin
+  return t::jsonb;
+exception when others then return null;
+end $$;
+
+-- 数据修复：被误存进 theme 的排版 JSON（含 id 键的对象串）挪到 layout_theme，theme 恢复占位
+-- 条件含 layout_theme is null：已迁移/已自定义的行不覆盖，保证幂等
+update tasks set
+  layout_theme = try_jsonb(theme),
+  theme = '主题待补'
+where theme like '{%' and try_jsonb(theme) ? 'id' and layout_theme is null;
