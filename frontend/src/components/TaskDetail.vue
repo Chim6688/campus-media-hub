@@ -88,6 +88,7 @@ async function onPDFUpload(e) {
   const file = e.target.files?.[0];
   if (!file) return;
   parsing.value = true;
+  startElapse(); // PDF 解析同样计入等待进度（P2-7）
   error.value = '';
   try {
     const data = await uploadPDF('/api/parse-pdf', file);
@@ -101,6 +102,7 @@ async function onPDFUpload(e) {
     error.value = err.message;
   } finally {
     parsing.value = false;
+    stopElapse();
     e.target.value = ''; // 允许重复上传同一文件
   }
 }
@@ -186,6 +188,7 @@ watch([title, summary, content, materialSnapshot], scheduleAutoSave);
 
 onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer);
+  stopElapse(); // P2-7：卸载时清掉计时器防泄漏
 });
 
 // 保存文稿（isAuto=true 表示由防抖自动触发）
@@ -222,9 +225,24 @@ function ensureSignature() {
 
 // ========== AI 工具条 ==========
 
+// ========== P2-7：AI 等待进度（超 8s 显示已等待秒数，避免像卡死） ==========
+const aiElapsed = ref(0);
+let aiTimer = null;
+function startElapse() {
+  stopElapse();
+  aiElapsed.value = 0;
+  aiTimer = setInterval(() => (aiElapsed.value += 1), 1000);
+}
+function stopElapse() {
+  if (aiTimer) clearInterval(aiTimer);
+  aiTimer = null;
+  aiElapsed.value = 0;
+}
+
 // 统一 AI 调用封装
 async function callAI(action, payload) {
   aiLoading.value = action;
+  startElapse(); // 计时与加载态同生命周期：进度提示依赖 aiElapsed
   try {
     const data = await request('/api/ai', {
       method: 'POST',
@@ -233,6 +251,7 @@ async function callAI(action, payload) {
     return data.text;
   } finally {
     aiLoading.value = '';
+    stopElapse();
   }
 }
 
@@ -613,7 +632,7 @@ async function emitRefreshAndGet() {
       <div v-if="materialOpen" class="panel-body">
         <div class="upload-area">
           <input type="file" accept=".pdf" :disabled="parsing" @change="onPDFUpload" />
-          <span v-if="parsing" class="parsing-hint">AI 正在解析策划书…</span>
+          <span v-if="parsing" class="parsing-hint">AI 正在解析策划书…{{ aiElapsed >= 8 ? `（已等待 ${aiElapsed} 秒）` : '' }}</span>
           <span v-else-if="material.name" class="parsed-ok">已提取：{{ material.name }}</span>
         </div>
         <div v-if="material.name || materialHighlightsText" class="material-fields">
@@ -665,6 +684,10 @@ async function emitRefreshAndGet() {
         {{ aiLoading === 'rewrite' ? '改写中…' : '选中改写' }}
       </button>
     </div>
+    <!-- P2-7：长任务等待提示，超 8 秒才出现，避免误以为卡死 -->
+    <p v-if="aiElapsed >= 8" class="ai-progress">
+      ⏳ AI 正在处理（已等待 {{ aiElapsed }} 秒）… 长文生成约需 10-25 秒，请勿离开本页
+    </p>
 
     <!-- 左右分栏：左 Markdown 编辑，右微信排版实时预览 -->
     <div class="editor-split">
@@ -868,6 +891,8 @@ textarea { resize: vertical; }
 .zone-title { font-size: 14px; color: #555; margin: 12px 0 4px; border-left: 3px solid #53de7b; padding-left: 8px; } /* 分区标题（P1-4） */
 .ai-toolbar { display: flex; gap: 8px; margin-top: 4px; }
 .ai-toolbar button { padding: 6px 12px; }
+/* P2-7：AI 等待进度提示 */
+.ai-progress { color: #b7791f; font-size: 13px; margin: 4px 0; }
 .error { color: #c0392b; white-space: pre-wrap; margin: 0; }
 .report { margin-top: 12px; padding: 12px; border-radius: 6px; font-size: 14px; }
 .report.ok { background: #eafaf1; }
