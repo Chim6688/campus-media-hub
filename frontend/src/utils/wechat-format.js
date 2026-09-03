@@ -1,7 +1,7 @@
 // Markdown → 手账卡片风微信 HTML 转换器（方向 D 定稿，参照 demo/theme-direction-d.html）
 // 纯函数、不调 AI：确定性转换，全部内联样式（公众号会剥离 class）
 import { marked } from 'marked';
-import { THEMES, DEFAULT_THEME } from './themes.js';
+import { THEMES, DEFAULT_THEME, resolveTheme } from './themes.js';
 
 // ===== 基础工具 =====
 
@@ -43,19 +43,19 @@ function titleCard(theme, title, eyebrow) {
   const brow = eyebrow
     ? `<span style="display:inline-block;border:1px solid ${theme.ink};border-radius:20px;padding:2px 16px;font-size:13px;color:${theme.ink};">${esc(eyebrow)}</span>`
     : '';
-  return `<section style="position:relative;margin:30px 8px 40px;background:${theme.cardBg};border:2px solid ${theme.ink};border-radius:4px;padding:28px 20px 24px;">
-<section style="position:absolute;left:-8px;top:-8px;right:14px;bottom:14px;border:2px solid ${theme.accentA};border-radius:4px;"></section>
-<section style="position:absolute;left:14px;top:14px;right:-8px;bottom:-8px;border:2px solid ${theme.accentB};border-radius:4px;"></section>
+  return `<section style="position:relative;margin:30px 8px 40px;background:${theme.cardBg};border:${theme.borderWidth}px solid ${theme.ink};border-radius:${theme.titleRadius}px;padding:28px 20px 24px;">
+<section style="position:absolute;left:-8px;top:-8px;right:14px;bottom:14px;border:2px solid ${theme.accentA};border-radius:${theme.titleRadius}px;"></section>
+<section style="position:absolute;left:14px;top:14px;right:-8px;bottom:-8px;border:2px solid ${theme.accentB};border-radius:${theme.titleRadius}px;"></section>
 <section style="position:relative;text-align:center;">${brow}
-<p style="font-size:22px;font-weight:bold;color:#1a1a1a;line-height:1.6;margin:14px 0 0;">${t}</p>
+<p style="font-size:${theme.titleFontSize}px;font-weight:bold;color:#1a1a1a;line-height:1.6;margin:14px 0 0;">${t}</p>
 </section>
 </section>`;
 }
 
 // 黑细描边引言卡（demo L30-33，用于开头金句）
 function introCard(theme, text) {
-  return `<section style="background:${theme.cardBg};border:1.5px solid ${theme.ink};border-radius:10px;padding:18px 20px;margin:0 8px 36px;">
-<p style="font-size:15px;color:${theme.ink};line-height:2;margin:0;">${inline(text, theme)}</p>
+  return `<section style="background:${theme.cardBg};border:${theme.thinBorder}px solid ${theme.ink};border-radius:${theme.radius}px;padding:18px 20px;margin:0 8px 36px;">
+<p style="font-size:${theme.bodyFontSize}px;color:${theme.ink};line-height:${theme.bodyLineHeight};margin:0;">${inline(text, theme)}</p>
 </section>`;
 }
 
@@ -63,7 +63,7 @@ function introCard(theme, text) {
 function sectionTitle(theme, num, text) {
   return `<section style="text-align:center;margin:0 0 30px;">
 <span style="display:inline-block;background:${theme.accentA};color:#fff;font-size:15px;font-weight:bold;padding:6px 10px;border-radius:6px 20px 20px 6px;vertical-align:middle;">${pad2(num)}</span>
-<span style="display:inline-block;background:${theme.cardBg};border:2px dashed ${theme.ink};border-radius:0 24px 24px 0;padding:6px 22px 6px 16px;font-size:17px;font-weight:bold;color:#1a1a1a;vertical-align:middle;margin-left:-4px;">${inline(text, theme)}</span>
+<span style="display:inline-block;background:${theme.cardBg};border:${theme.borderWidth}px dashed ${theme.ink};border-radius:0 24px 24px 0;padding:6px 22px 6px 16px;font-size:${theme.sectionFontSize}px;font-weight:bold;color:#1a1a1a;vertical-align:middle;margin-left:-4px;">${inline(text, theme)}</span>
 <span style="display:inline-block;width:10px;height:10px;background:${theme.accentB};vertical-align:middle;margin-left:8px;transform:rotate(45deg);"></span>
 </section>`;
 }
@@ -72,14 +72,14 @@ function sectionTitle(theme, num, text) {
 function subHeading(theme, num, text) {
   return `<section style="text-align:center;margin:0 8px 14px;">
 <span style="display:inline-block;background:${theme.accentB};color:#fff;font-size:13px;font-weight:bold;width:26px;height:26px;line-height:26px;border-radius:50%;vertical-align:middle;">${num}</span>
-<span style="display:inline-block;background:${theme.cardBg};border-top:2px solid ${theme.accentB};border-radius:0 0 10px 10px;padding:6px 18px;font-size:15px;font-weight:bold;color:#1a1a1a;vertical-align:middle;">${inline(text, theme)}</span>
+<span style="display:inline-block;background:${theme.cardBg};border-top:${theme.borderWidth}px solid ${theme.accentB};border-radius:0 0 10px 10px;padding:6px 18px;font-size:${theme.bodyFontSize}px;font-weight:bold;color:#1a1a1a;vertical-align:middle;">${inline(text, theme)}</span>
 </section>`;
 }
 
 // 正文卡：白底对角圆角（demo L43-45）
 function bodyCard(theme, text) {
-  return `<section style="background:${theme.cardBg};border-radius:10px 0 10px 0;padding:20px 22px;margin:0 8px 36px;">
-<p style="font-size:15px;color:${theme.ink};line-height:2;text-align:justify;text-indent:2em;margin:0;">${inline(text, theme)}</p>
+  return `<section style="background:${theme.cardBg};border-radius:${theme.radius}px 0 ${theme.radius}px 0;padding:20px 22px;margin:0 8px ${theme.sectionGap}px;">
+<p style="font-size:${theme.bodyFontSize}px;color:${theme.ink};line-height:${theme.bodyLineHeight};text-align:justify;text-indent:2em;margin:0;">${inline(text, theme)}</p>
 </section>`;
 }
 
@@ -92,22 +92,22 @@ function infoBadge(theme, text) {
 
 // 信息卡：等宽行（demo L53-55）
 function infoCard(theme, text) {
-  return `<section style="background:${theme.cardBg};border-radius:10px 0 10px 0;padding:20px 24px;margin:0 8px 36px;">
-<p style="font-size:16px;color:${theme.ink};line-height:2.2;margin:0;">${inline(text, theme)}</p>
+  return `<section style="background:${theme.cardBg};border-radius:${theme.radius}px 0 ${theme.radius}px 0;padding:20px 24px;margin:0 8px ${theme.sectionGap}px;">
+<p style="font-size:16px;color:${theme.ink};line-height:${theme.bodyLineHeight + 0.2};margin:0;">${inline(text, theme)}</p>
 </section>`;
 }
 
 // 粉描边金句条（demo L71-73，正文中段引用）
 function quoteCard(theme, text) {
-  return `<section style="background:${theme.cardBg};border:1.5px solid ${theme.accentA};border-radius:4px;padding:14px 20px;margin:0 8px 36px;text-align:center;">
-<span style="font-size:15px;color:${theme.ink};line-height:1.9;">${inline(text, theme)}</span>
+  return `<section style="background:${theme.cardBg};border:${theme.thinBorder}px solid ${theme.accentA};border-radius:${theme.titleRadius}px;padding:14px 20px;margin:0 8px ${theme.sectionGap}px;text-align:center;">
+<span style="font-size:${theme.bodyFontSize}px;color:${theme.ink};line-height:1.9;">${inline(text, theme)}</span>
 </section>`;
 }
 
 // 奶油落款卡（demo L76-79）
 function footerCard(theme, text) {
   return `<section style="background:${theme.cream};border:1px solid ${theme.creamBorder};border-radius:12px;padding:20px 24px;margin:0 8px;text-align:center;">
-<p style="font-size:14px;color:${theme.ink};line-height:2.1;margin:0;">${inline(text, theme)}</p>
+<p style="font-size:14px;color:${theme.ink};line-height:${theme.bodyLineHeight + 0.1};margin:0;">${inline(text, theme)}</p>
 </section>`;
 }
 
@@ -120,7 +120,7 @@ function imagePlaceholder(theme, desc) {
 function listRow(theme, text) {
   return `<section style="margin:0 8px 10px;">
 <span style="display:inline-block;width:8px;height:8px;background:${theme.accentB};border-radius:50%;margin-right:10px;vertical-align:middle;"></span>
-<span style="font-size:15px;color:${theme.ink};line-height:1.9;vertical-align:middle;display:inline-block;width:calc(100% - 20px);">${inline(text, theme)}</span>
+<span style="font-size:${theme.bodyFontSize}px;color:${theme.ink};line-height:${theme.bodyLineHeight - 0.1};vertical-align:middle;display:inline-block;width:calc(100% - 20px);">${inline(text, theme)}</span>
 </section>`;
 }
 
@@ -128,7 +128,7 @@ function listRow(theme, text) {
 
 // markdown: 正文 Markdown；opts.title/opts.eyebrow 用于文首标题卡（通常传任务标题+类型）
 export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {}) {
-  const theme = THEMES[themeId] || THEMES[DEFAULT_THEME];
+  const theme = resolveTheme(themeId, opts.overrides); // 预设 + 用户覆盖合并后的完整令牌
   const tokens = marked.lexer(markdown || '');
   const parts = [];
   let sectionNum = 0; // 小节/子标题共用递增序号（01/02/03...）
