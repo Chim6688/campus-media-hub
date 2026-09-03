@@ -4,6 +4,7 @@ import { request, uploadPDF } from '../api/client.js';
 import { markdownToWechatHTML, markdownToPlainText } from '../utils/wechat-format.js';
 import { THEMES } from '../utils/themes.js';
 import { normalizeLines, makeItem } from '../utils/checklist.mjs'; // 整改清单纯函数（与后端双份同步）
+import { computeSteps } from '../utils/steps.js'; // 流程步骤条纯函数（P1-3）
 
 const props = defineProps({ task: Object });
 const emit = defineEmits(['back', 'refresh']);
@@ -331,6 +332,18 @@ async function execRewrite(instruction) {
   }
 }
 
+// ========== 流程步骤条（P1-3：数据完备度驱动，纯引导不设闸） ==========
+// 五步完成度由纯函数按任务数据计算：选题=已建任务、素材/成稿看数据、排版/审核看状态
+const steps = computed(() => computeSteps(props.task));
+// 步骤 → 页面区块选择器映射（选题在头部无独立区块，点击不滚动）
+const STEP_ANCHORS = { topic: null, material: '.material-panel', draft: '.ai-toolbar', layout: '.editor-split', review: '.toolbar' };
+// 点击步骤：平滑滚动到对应区块（不拦截任何操作，不改变按钮可达性）
+function scrollToStep(key) {
+  const sel = STEP_ANCHORS[key];
+  if (!sel) return;
+  document.querySelector(sel)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 // ========== 状态操作（详情页直接推进/打回，不必回列表） ==========
 
 const STATUS_TEXT = { writing: '写稿中', reviewing: '审核中', published: '已发布' };
@@ -576,6 +589,17 @@ async function emitRefreshAndGet() {
       <button class="back" @click="emit('back')">← 返回列表</button>
       <h2>{{ task.theme }}</h2>
       <span class="status-tag" :class="task.status">{{ STATUS_TEXT[task.status] || task.status }}</span>
+    </div>
+
+    <!-- 流程步骤条：引导不是闸门，不改变任何操作可达性 -->
+    <div class="steps-bar">
+      <template v-for="(s, i) in steps" :key="s.key">
+        <span class="step" :class="{ done: s.done, active: s.active }"
+          @click="scrollToStep(s.key)" :title="s.done ? '点击回到该区' : s.label">
+          <i>{{ s.done ? '✓' : i + 1 }}</i>{{ s.label }}
+        </span>
+        <span v-if="i < steps.length - 1" class="step-arrow">›</span>
+      </template>
     </div>
 
     <!-- 素材面板：上传策划书 → AI 提取 → 人工补充 → 一键成稿 -->
@@ -890,4 +914,14 @@ textarea { resize: vertical; }
 .checklist-ok { color: #27ae60; font-size: 13px; margin: 6px 0 0; }
 /* 打回弹窗主按钮：与打回按钮同色系（橙） */
 .modal-btns .primary { background: #e67e22; color: #fff; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+
+/* 流程步骤条（P1-3）：编辑器侧引导 UI，点击平滑滚动到对应区块 */
+.steps-bar { display: flex; align-items: center; gap: 6px; padding: 6px 0; flex-wrap: wrap; }
+.step { font-size: 12px; color: #999; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.step i { font-style: normal; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; border: 1px solid #ccc; font-size: 11px; }
+.step.done { color: #27ae60; }
+.step.done i { background: #eafaf1; border-color: #27ae60; }
+.step.active { color: #1a73e8; font-weight: bold; }
+.step.active i { background: #e8f0fe; border-color: #1a73e8; }
+.step-arrow { color: #ddd; }
 </style>
