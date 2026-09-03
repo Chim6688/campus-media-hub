@@ -57,6 +57,10 @@ export default async (req) => {
     if (body.material && typeof body.material === 'object' && !Array.isArray(body.material)) {
       patch.material = body.material;
     }
+    // 排版主题（P0-1：皮肤 id + 令牌覆盖，随任务持久化供复用）
+    if (body.theme && typeof body.theme === 'object' && !Array.isArray(body.theme)) {
+      patch.theme = { id: String(body.theme.id || ''), overrides: body.theme.overrides || {} };
+    }
     // 生成只读分享 token（P1-7：/share/:token 免口令查看）
     if (body.generateShare) {
       patch.share_token = crypto.randomUUID().replace(/-/g, '').slice(0, 16);

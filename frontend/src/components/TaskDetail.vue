@@ -157,6 +157,10 @@ watch(() => props.task.id, () => {
   summary.value = props.task.summary || '';
   content.value = props.task.content || '';
   fillMaterial(props.task.material);
+  // 主题回填：皮肤 id 优先任务级 theme，无则回退全局记忆（在 switching 保护内，避免触发自动保存覆盖）
+  themeId.value = props.task.theme?.id || localStorage.getItem('themeId') || 'greenPink';
+  for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
+  Object.assign(themeOverrides, props.task.theme?.overrides || {});
   if (saveTimer) clearTimeout(saveTimer);
   nextTick(() => (switching = false));
 });
@@ -190,6 +194,7 @@ async function save(isAuto = false) {
       title: title.value,
       summary: summary.value,
       content: content.value,
+      theme: { id: themeId.value, overrides: { ...themeOverrides } }, // 排版主题随任务持久化（P0-1）
     };
     if (hasMaterial()) body.material = materialPayload(); // 素材随文稿一起持久化
     await request('/api/tasks', {
@@ -401,13 +406,37 @@ async function addComment() {
 
 // ========== 微信排版预览 + 复制到公众号 ==========
 
-// 模板皮肤：记忆用户上次选择
-const themeId = ref(localStorage.getItem('themeId') || 'greenPink');
-watch(themeId, (v) => localStorage.setItem('themeId', v));
+// 模板皮肤：任务级持久化（task.theme），无则回退 localStorage
+const themeId = ref(props.task.theme?.id || localStorage.getItem('themeId') || 'greenPink');
+// 令牌覆盖：色板 + 圆角/字号/间距滑杆（滑杆 min/max 即 clamp 范围，防破坏性布局）
+const themeOverrides = reactive({ ...(props.task.theme?.overrides || {}) });
+// 参数面板字段定义：type=color 为色板，type=range 为滑杆（值范围即 clamp）
+const OVERRIDES_SCHEMA = [
+  { key: 'accentA', label: '强调色A', type: 'color' },
+  { key: 'accentB', label: '强调色B', type: 'color' },
+  { key: 'radius', label: '卡片圆角', type: 'range', min: 0, max: 24, step: 1, unit: 'px' },
+  { key: 'titleFontSize', label: '标题字号', type: 'range', min: 18, max: 28, step: 1, unit: 'px' },
+  { key: 'bodyFontSize', label: '正文字号', type: 'range', min: 13, max: 18, step: 1, unit: 'px' },
+  { key: 'sectionGap', label: '段落间距', type: 'range', min: 16, max: 60, step: 2, unit: 'px' },
+];
+const panelOpen = ref(false); // 参数面板默认收起
 
-// 右侧实时预览：Markdown → 手账卡片风 HTML（标题卡取标题字段，眉标用任务类型）
+watch(themeId, (v) => localStorage.setItem('themeId', v));
+// 用户切换预设时清空覆盖（预设即完整方案）；任务切换回填是程序化赋值，由 switching 标记跳过
+watch(themeId, () => {
+  if (switching) return; // 任务切换时不清空刚回填的覆盖
+  for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
+});
+
+// 主题快照进自动保存：皮肤与覆盖变化都触发防抖保存（switching 时由 scheduleAutoSave 内部跳过）
+const themeSnapshot = computed(() => JSON.stringify({ id: themeId.value, overrides: themeOverrides }));
+watch(themeSnapshot, () => scheduleAutoSave());
+
+// 右侧实时预览：Markdown → 手账卡片风 HTML（标题卡取标题字段，眉标用任务类型；overrides 传令牌覆盖）
 const wechatHTML = computed(() =>
-  markdownToWechatHTML(content.value, themeId.value, { title: title.value, eyebrow: props.task.type }),
+  markdownToWechatHTML(content.value, themeId.value, {
+    title: title.value, eyebrow: props.task.type, overrides: { ...themeOverrides },
+  }),
 );
 const copied = ref(false);
 
@@ -560,8 +589,25 @@ async function emitRefreshAndGet() {
           <select v-model="themeId" title="模板皮肤">
             <option v-for="(t, k) in THEMES" :key="k" :value="k">{{ t.label }}</option>
           </select>
+          <button class="param-toggle" @click="panelOpen = !panelOpen" title="排版参数">
+            {{ panelOpen ? '收起参数' : '🎨 调参数' }}
+          </button>
           <button class="copy-wechat" :disabled="!content" @click="copyToWechat">
             {{ copied ? '✓ 已复制，去公众号粘贴' : '📋 复制到公众号' }}
+          </button>
+        </div>
+        <!-- 参数面板：色板 + 滑杆，即时反映预览（只调令牌，不碰复制链路） -->
+        <div v-if="panelOpen" class="param-panel">
+          <div v-for="f in OVERRIDES_SCHEMA" :key="f.key" class="param-row">
+            <label class="param-label">{{ f.label }}</label>
+            <input v-if="f.type === 'color'" type="color" v-model="themeOverrides[f.key]" />
+            <template v-else>
+              <input type="range" :min="f.min" :max="f.max" :step="f.step" v-model.number="themeOverrides[f.key]" />
+              <span class="param-val">{{ themeOverrides[f.key] ?? '默认' }}{{ f.unit }}</span>
+            </template>
+          </div>
+          <button class="param-reset" @click="() => { for (const k of Object.keys(themeOverrides)) delete themeOverrides[k]; }">
+            恢复默认
           </button>
         </div>
         <div class="preview-body" v-html="wechatHTML"></div>
@@ -734,4 +780,14 @@ textarea { resize: vertical; }
   .editor-split { flex-direction: column; }
   .preview-body { max-height: 480px; }
 }
+
+/* 排版参数面板（P0-1）：编辑器侧 UI，非微信预览内容 */
+.param-toggle { padding: 4px 10px; font-size: 12px; }
+.param-panel { border: 1px dashed #d8cfc0; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+.param-row { display: flex; align-items: center; gap: 8px; }
+.param-label { font-size: 12px; color: #666; width: 64px; margin: 0; }
+.param-row input[type='range'] { flex: 1; }
+.param-row input[type='color'] { width: 40px; height: 26px; padding: 0; border: 1px solid #ddd; border-radius: 4px; }
+.param-val { font-size: 12px; color: #999; width: 48px; text-align: right; }
+.param-reset { grid-column: 1 / -1; font-size: 12px; color: #999; }
 </style>
