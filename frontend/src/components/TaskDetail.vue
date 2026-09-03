@@ -43,7 +43,7 @@ function cancelModal() {
 }
 
 // ========== 素材面板（策划书解析 + 人工补充） ==========
-const materialOpen = ref(true); // 默认展开：核心工作流入口
+const materialOpen = ref(false); // P1-4：默认收起降密度，有素材时头部显示摘要
 const parsing = ref(false);
 // 结构化素材：highlights/flow 面板中按行编辑，提交时拆数组
 const material = reactive({ name: '', time: '', location: '', target: '', meaning: '' });
@@ -606,6 +606,9 @@ async function emitRefreshAndGet() {
     <div class="material-panel">
       <div class="panel-header" @click="materialOpen = !materialOpen">
         📋 素材面板 {{ materialOpen ? '▼' : '▶' }}
+        <span v-if="!materialOpen && material.name" class="panel-summary">
+          已提取：{{ material.name }} · {{ (materialHighlightsText.match(/[^\n]+/g) || []).length }} 条亮点
+        </span>
       </div>
       <div v-if="materialOpen" class="panel-body">
         <div class="upload-area">
@@ -644,6 +647,9 @@ async function emitRefreshAndGet() {
 
     <label>摘要</label>
     <textarea v-model="summary" rows="2" placeholder="公众号推送摘要（可点 AI 生成）"></textarea>
+
+    <!-- 分区标题：明确主区为成稿编辑区（P1-4 降密度，只加层级不重排） -->
+    <h3 class="zone-title">✍️ 成稿编辑</h3>
 
     <div class="ai-toolbar">
       <button :disabled="!!aiLoading" @click="generateDraft">
@@ -835,6 +841,7 @@ textarea { resize: vertical; }
 /* 素材面板 */
 .material-panel { border: 1px solid #e6e2d9; border-radius: 8px; overflow: hidden; }
 .panel-header { padding: 10px 12px; background: #faf8f3; cursor: pointer; font-weight: 600; font-size: 14px; user-select: none; }
+.panel-summary { font-size: 12px; color: #999; margin-left: 8px; font-weight: 400; } /* 收起态摘要：活动名+亮点条数 */
 .panel-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #f0ede5; }
 .upload-area { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .parsing-hint { color: #1a73e8; font-size: 13px; }
@@ -858,6 +865,7 @@ textarea { resize: vertical; }
 
 .toolbar { display: flex; align-items: center; gap: 12px; }
 .saved { color: #27ae60; font-size: 13px; }
+.zone-title { font-size: 14px; color: #555; margin: 12px 0 4px; border-left: 3px solid #53de7b; padding-left: 8px; } /* 分区标题（P1-4） */
 .ai-toolbar { display: flex; gap: 8px; margin-top: 4px; }
 .ai-toolbar button { padding: 6px 12px; }
 .error { color: #c0392b; white-space: pre-wrap; margin: 0; }
