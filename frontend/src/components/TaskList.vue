@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { request } from '../api/client.js';
 
 const props = defineProps({ tasks: Array });
@@ -13,6 +13,22 @@ const error = ref('');
 const STATUS_TEXT = {
   writing: '写稿中', reviewing: '审核中', published: '已发布',
 };
+
+// ========== 筛选（P1-5：状态 Tab + 类型下拉 + 关键词，纯前端过滤） ==========
+const statusFilter = ref('all');
+const typeFilter = ref('all');
+const keyword = ref('');
+// 类型下拉选项：从现有任务里去重提取，避免硬编码
+const allTypes = computed(() => [...new Set((props.tasks || []).map((t) => t.type).filter(Boolean))]);
+// 三重过滤：状态 + 类型 + 关键词（匹配主题/标题/署名，不区分大小写）
+const filteredTasks = computed(() =>
+  (props.tasks || []).filter((t) =>
+    (statusFilter.value === 'all' || t.status === statusFilter.value) &&
+    (typeFilter.value === 'all' || t.type === typeFilter.value) &&
+    (!keyword.value.trim() ||
+      `${t.theme} ${t.title || ''} ${t.author}`.toLowerCase().includes(keyword.value.trim().toLowerCase())),
+  ),
+);
 
 // 新建任务：成功后记住署名，刷新列表并直接进入详情编辑
 async function createTask() {
@@ -71,8 +87,20 @@ async function advance(t) {
       <input v-model="author" placeholder="你的名字" />
       <button @click="createTask">新建任务</button>
     </div>
+    <!-- 筛选区：状态 Tab + 类型下拉 + 关键词搜索（纯前端过滤，不改后端参数） -->
+    <div class="filters">
+      <div class="status-tabs">
+        <button v-for="s in [['all','全部'],['writing','写稿中'],['reviewing','审核中'],['published','已发布']]"
+          :key="s[0]" :class="{ on: statusFilter === s[0] }" @click="statusFilter = s[0]">{{ s[1] }}</button>
+      </div>
+      <select v-model="typeFilter">
+        <option value="all">全部类型</option>
+        <option v-for="t in allTypes" :key="t" :value="t">{{ t }}</option>
+      </select>
+      <input v-model="keyword" placeholder="🔍 搜索主题/标题/署名" />
+    </div>
     <ul class="task-list">
-      <li v-for="t in tasks" :key="t.id" @click="emit('open', t)">
+      <li v-for="t in filteredTasks" :key="t.id" @click="emit('open', t)">
         <span class="title">【{{ t.type }}】{{ t.theme }}</span>
         <span class="meta">{{ t.author }} · {{ STATUS_TEXT[t.status] || t.status }}</span>
         <button v-if="t.status !== 'published'" class="advance" @click.stop="advance(t)">
@@ -80,7 +108,10 @@ async function advance(t) {
         </button>
       </li>
     </ul>
-    <p v-if="tasks.length === 0" class="empty">暂无任务，新建一个吧</p>
+    <!-- 空态区分：列表本身为空 vs 筛选条件无命中 -->
+    <p v-if="filteredTasks.length === 0" class="empty">
+      {{ tasks.length ? '没有匹配的任务' : '暂无任务，新建一个吧' }}
+    </p>
     <p v-if="error" class="error">{{ error }}</p>
   </section>
 </template>
@@ -95,4 +126,10 @@ async function advance(t) {
 .advance { padding: 4px 10px; }
 .error { color: #c0392b; white-space: pre-wrap; }
 .empty { color: #999; }
+/* 筛选区：状态 Tab 胶囊 + 类型下拉 + 关键词搜索（P1-5） */
+.filters { display: flex; gap: 8px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+.status-tabs { display: flex; gap: 4px; }
+.status-tabs button { padding: 4px 12px; border: 1px solid #e0e0e0; background: #fff; border-radius: 14px; font-size: 13px; cursor: pointer; }
+.status-tabs button.on { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+.filters select, .filters input { padding: 5px 10px; font-size: 13px; }
 </style>
