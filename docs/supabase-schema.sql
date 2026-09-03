@@ -57,3 +57,11 @@ alter table tasks add column if not exists share_token text;
 
 -- 旧数据迁移：四态 → 三态（"排版中"任务视为还在写稿）
 update tasks set status = 'writing' where status = 'typesetting';
+
+-- ========== v3 增量迁移（P0-1/P0-2/P2-6，幂等，可重复执行） ==========
+
+-- P0-1：排版主题（皮肤 id + 令牌覆盖），null = 未自定义（用全局默认）
+alter table tasks add column if not exists theme jsonb;
+
+-- P0-2：整改清单 [{id, text, done, at}]，默认空数组（旧任务不阻塞流转）
+alter table tasks add column if not exists review_checklist jsonb not null default '[]';
