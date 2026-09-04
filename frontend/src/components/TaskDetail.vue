@@ -845,6 +845,11 @@ async function emitRefreshAndGet() {
         </div>
       </div>
     </div>
+
+    <!-- 模板画廊：点卡片应用皮肤；themeId 赋值后既有 watch 自动清覆盖+持久化 -->
+    <ThemeGallery v-if="galleryOpen" :current="themeId"
+      @select="(id) => { themeId = id; galleryOpen = false; }"
+      @close="galleryOpen = false" />
   </section>
 </template>
 
