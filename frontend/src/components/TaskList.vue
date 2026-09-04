@@ -151,4 +151,11 @@ async function reuseTask(t) {
 .status-tabs button { padding: 4px 12px; border: 1px solid #e0e0e0; background: #fff; border-radius: 14px; font-size: 13px; cursor: pointer; }
 .status-tabs button.on { background: #1a73e8; color: #fff; border-color: #1a73e8; }
 .filters select, .filters input { padding: 5px 10px; font-size: 13px; }
+/* 移动端（C 批）：新建表单与列表行换行，防 375px 横向溢出 */
+@media (max-width: 768px) {
+  .new-task { flex-wrap: wrap; }
+  .new-task input, .new-task select { min-width: 140px; } /* 换行后控件不被压扁 */
+  .new-task button { flex: 1; } /* 按钮独占行尾，方便点按 */
+  .task-list li { flex-wrap: wrap; } /* 长标题占满首行，meta+按钮自然落到次行 */
+}
 </style>

@@ -85,4 +85,8 @@ onMounted(() => {
 .page { max-width: 1080px; margin: 40px auto; font-family: system-ui, sans-serif; padding: 0 16px; }
 .gate input { margin-right: 8px; padding: 6px 10px; }
 .error { color: #c0392b; }
+/* 移动端（C 批）：压缩页面上下留白，把屏幕让给内容 */
+@media (max-width: 768px) {
+  .page { margin: 16px auto; }
+}
 </style>
