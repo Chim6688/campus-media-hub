@@ -511,6 +511,7 @@ const OVERRIDES_SCHEMA = [
   { key: 'sectionGap', label: '段落间距', type: 'range', min: 16, max: 60, step: 2, unit: 'px' },
 ];
 const panelOpen = ref(false); // 参数面板默认收起
+const galleryOpen = ref(false); // 模板画廊弹窗开关（批1）
 
 watch(themeId, (v) => localStorage.setItem('themeId', v));
 // 用户切换预设时清空覆盖（预设即完整方案）；任务切换回填是程序化赋值，由 switching 标记跳过
