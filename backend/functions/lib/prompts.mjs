@@ -118,4 +118,26 @@ ${(p.material?.flow || []).map((f, i) => `${i + 1}. ${f}`).join('\n')}
 ${p.text.slice(0, 2000)}`,
     },
   ],
+  // AI 生成皮肤配色（B 批）：风格描述 → 8 个 hex（前端 skin.js normalizeSkin 清洗后应用）
+  gen_skin: (p) => [
+    { role: 'system', content: '你是公众号排版配色设计师，擅长把抽象的风格描述转化为和谐、对比度适宜的配色方案。' },
+    {
+      role: 'user',
+      content: `为推文排版模板生成一套配色。风格描述：${p.text || '清新活泼的校园风'}
+
+输出以下 8 个字段的 hex 颜色值（#rrggbb 格式），各字段用途与要求：
+- pageBg：页面底色，必须浅色（如 #F7F5F0）
+- accentA：强调色A，用于标题装饰层/序号/金句描边，饱和度可高
+- accentB：强调色B，用于标签/圆点装饰，与 accentA 和谐但不相同
+- ink：正文与描边墨色，必须深色保证可读（如 #3E3E3E）
+- cardBg：卡片底色，接近白色（如 #ffffff）
+- cream：落款卡底色，浅色
+- creamBorder：落款卡描边，比 cream 深一档
+- creamText：落款卡文字，灰色调
+
+要求：整体和谐、手机阅读对比度足够、贴合风格描述的色感。
+严格按 JSON 对象输出，不要任何其他文字，不要 markdown 代码块包裹，如：
+{"pageBg":"#...","accentA":"#...","accentB":"#...","ink":"#...","cardBg":"#...","cream":"#...","creamBorder":"#...","creamText":"#..."}`,
+    },
+  ],
 };
