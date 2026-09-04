@@ -5,6 +5,7 @@ import { markdownToWechatHTML, markdownToPlainText } from '../utils/wechat-forma
 import { THEMES } from '../utils/themes.js';
 import { normalizeLines, makeItem } from '../utils/checklist.mjs'; // 整改清单纯函数（与后端双份同步）
 import { computeSteps } from '../utils/steps.js'; // 流程步骤条纯函数（P1-3）
+import ThemeGallery from './ThemeGallery.vue'; // 模板画廊弹窗（批1）
 
 const props = defineProps({ task: Object });
 const emit = defineEmits(['back', 'refresh']);
@@ -700,6 +701,9 @@ async function emitRefreshAndGet() {
           <select v-model="themeId" title="模板皮肤">
             <option v-for="(t, k) in THEMES" :key="k" :value="k">{{ t.label }}</option>
           </select>
+          <button class="param-toggle" @click="galleryOpen = true" title="浏览全部模板效果">
+            🖼 画廊
+          </button>
           <button class="param-toggle" @click="panelOpen = !panelOpen" title="排版参数">
             {{ panelOpen ? '收起参数' : '🎨 调参数' }}
           </button>
