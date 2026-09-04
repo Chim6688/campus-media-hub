@@ -61,3 +61,34 @@ test('未知主题回退默认不报错', () => {
   const h = markdownToWechatHTML(SAMPLE, 'not-exist', {});
   assert.ok(h.includes('#FD98C9'), '回退 greenPink');
 });
+
+// ===== 链接转参考文献（批3） =====
+
+test('链接转参考文献：链接文字保留+上标序号，文末列出参考链接', () => {
+  const md = '报名请填[报名表](https://example.com/form)，详情见[官网](https://example.com)。';
+  const h = markdownToWechatHTML(md, 'greenPink', {});
+  assert.ok(!h.includes('href'), '微信正文不输出可点 a 标签');
+  assert.ok(h.includes('报名表<span'), '链接文字保留+紧跟上标');
+  assert.ok(h.includes('vertical-align:super'), '上标样式为内联（微信兼容不用sup）');
+  assert.ok(h.includes('[1] https://example.com/form'), '文末参考链接1');
+  assert.ok(h.includes('[2] https://example.com'), '文末参考链接2');
+  assert.ok(h.includes('参考链接'), '参考链接区标题');
+});
+
+test('同 URL 复用同一序号；无链接文章不出现参考区（回归保护）', () => {
+  const h1 = markdownToWechatHTML('见[表单](https://a.com)或[备用表单](https://a.com)。', 'greenPink', {});
+  assert.ok(h1.includes('[1] https://a.com'), '同URL只编一个号');
+  assert.ok(!h1.includes('[2]'), '不产生第二个序号');
+  const h2 = markdownToWechatHTML('普通正文没有链接。', 'greenPink', {});
+  assert.ok(!h2.includes('参考链接'), '无链接不出参考区');
+});
+
+test('extractLinks 纯函数：非 http(s) 链接不动（防误伤相对路径）', async () => {
+  // 动态导入：RED 阶段 extractLinks 尚未导出，静态导入会链接期报错掩盖既有测试的运行
+  const { extractLinks } = await import('../src/utils/wechat-format.js');
+  const refs = [];
+  const out = extractLinks('看[文档](./local.md)和[官网](https://x.com)', refs);
+  assert.ok(out.includes('[文档](./local.md)'), '相对路径保持原样');
+  assert.equal(refs.length, 1, '只收 http(s) 链接');
+  assert.ok(out.includes('官网〔1〕'), 'http链接转标记');
+});

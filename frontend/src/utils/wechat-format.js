@@ -19,6 +19,8 @@ function inline(s, theme) {
   let t = esc(s);
   // 加粗
   t = t.replace(/\*\*([^*]+)\*\*/g, `<strong style="font-weight:bold;color:${theme.ink};">$1</strong>`);
+  // 参考文献上标标记〔N〕 → 上标序号（批3：extractLinks 产生的临时标记在此渲染；用内联 span 不用 sup，微信编辑器兼容）
+  t = t.replace(/〔(\d+)〕/g, (m, n) => `<span style="vertical-align:super;font-size:0.75em;color:${theme.accentA};">${n}</span>`);
   // 行内配图占位（非整段占位时以小标签呈现）
   t = t.replace(
     /\[配图[：:]\s*([^\]]*)\]/g,
@@ -124,12 +126,31 @@ function listRow(theme, text) {
 </section>`;
 }
 
+// 链接提取（批3）：[label](url) → label〔N〕，url 收进 refs（同 URL 复用序号）
+// 只认 http(s) 绝对链接，相对路径原样保留防误伤；〔N〕由 inline() 渲染为上标
+export function extractLinks(s, refs) {
+  return String(s).replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label, url) => {
+    let i = refs.indexOf(url);
+    if (i === -1) { refs.push(url); i = refs.length - 1; }
+    return `${label}〔${i + 1}〕`;
+  });
+}
+
+// 参考链接落款卡（批3）：文末奶油卡列出全部链接，读者长按复制
+function refCard(theme, refs) {
+  const rows = refs
+    .map((u, i) => `<p style="font-size:12px;color:${theme.creamText};line-height:1.8;margin:0;word-break:break-all;">[${i + 1}] ${esc(u)}</p>`)
+    .join('');
+  return `<section style="background:${theme.cream};border:1px solid ${theme.creamBorder};border-radius:12px;padding:14px 20px;margin:20px 8px 8px;text-align:left;"><p style="font-size:12px;color:${theme.creamText};margin:0 0 6px;">📎 参考链接（微信正文链接不可点，长按复制网址打开）</p>${rows}</section>`;
+}
+
 // ===== 主入口 =====
 
 // markdown: 正文 Markdown；opts.title/opts.eyebrow 用于文首标题卡（通常传任务标题+类型）
 export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {}) {
   const theme = resolveTheme(themeId, opts.overrides); // 预设 + 用户覆盖合并后的完整令牌
   const tokens = marked.lexer(markdown || '');
+  const refs = []; // 批3：全文链接收集（同 URL 复用序号）
   const parts = [];
   let sectionNum = 0; // 小节/子标题共用递增序号（01/02/03...）
   let inInfoSection = false; // 是否处于"核心信息"类小节内
@@ -161,7 +182,7 @@ export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {
         break;
       }
       case 'paragraph': {
-        const text = (tok.text || '').trim();
+        const text = extractLinks((tok.text || '').trim(), refs);
         if (isPlaceholderPara(text)) {
           parts.push(imagePlaceholder(theme, text.replace(/^\[配图[：:]\s*/, '').replace(/\]$/, '')));
         } else if (isFooterPara(text)) {
@@ -177,18 +198,18 @@ export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {
         // 第一个引用 = 开头引言卡；后续引用 = 金句条
         if (!introDone) {
           introDone = true;
-          parts.push(introCard(theme, tok.text || ''));
+          parts.push(introCard(theme, extractLinks(tok.text || '', refs)));
         } else {
-          parts.push(quoteCard(theme, tok.text || ''));
+          parts.push(quoteCard(theme, extractLinks(tok.text || '', refs)));
         }
         break;
       }
       case 'list': {
         for (const item of tok.items || []) {
           if (inInfoSection) {
-            parts.push(infoCard(theme, item.text || ''));
+            parts.push(infoCard(theme, extractLinks(item.text || '', refs)));
           } else {
-            parts.push(listRow(theme, (tok.ordered ? `${item.taskDelimiter ? '' : ''}` : '') + (item.text || '')));
+            parts.push(listRow(theme, extractLinks((tok.ordered ? `${item.taskDelimiter ? '' : ''}` : '') + (item.text || ''), refs)));
           }
         }
         // 列表结束后补一段间距
@@ -207,6 +228,9 @@ export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {
   if (!hasH1 && opts.title) {
     parts.unshift(titleCard(theme, opts.title, opts.eyebrow));
   }
+
+  // 批3：有链接时文末追加参考链接区（放在最末，落款卡之后，与 wechat-format 先例一致）
+  if (refs.length) parts.push(refCard(theme, refs));
 
   // 外层包裹：底色 + 字体（复制到公众号时底色随行）
   return `<section style="background:${theme.pageBg};padding:24px 16px 40px;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">\n${parts.join('\n')}\n</section>`;
