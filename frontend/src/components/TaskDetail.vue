@@ -986,6 +986,11 @@ textarea { resize: vertical; }
 @media (max-width: 768px) {
   .editor-split { flex-direction: column; }
   .preview-body { max-height: 480px; }
+  /* C 批：工具条/预览头/AI工具条/详情头换行，多按钮不再溢出 */
+  .detail-head { flex-wrap: wrap; }
+  .toolbar { flex-wrap: wrap; }
+  .preview-header { flex-wrap: wrap; }
+  .ai-toolbar { flex-wrap: wrap; }
 }
 
 /* 排版参数面板（P0-1）：编辑器侧 UI，非微信预览内容 */
@@ -1020,4 +1025,11 @@ textarea { resize: vertical; }
 
 /* AI 配色弹窗提示行（B 批） */
 .skin-tip { font-size: 12px; color: #999; margin: 8px 0 0; }
+
+/* 窄屏（C 批）：参数面板与素材字段单列化，标签+滑杆不再同行挤压。
+   注：置于 .param-panel 基础规则之后，确保窄屏覆盖在层叠中生效 */
+@media (max-width: 768px) {
+  .param-panel { grid-template-columns: 1fr; }
+  .material-fields { grid-template-columns: 1fr; }
+}
 </style>
