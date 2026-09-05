@@ -140,4 +140,21 @@ ${p.text.slice(0, 2000)}`,
 {"pageBg":"#...","accentA":"#...","accentB":"#...","ink":"#...","cardBg":"#...","cream":"#...","creamBorder":"#...","creamText":"#..."}`,
     },
   ],
+
+  // AI 图片建议（V1.0 Phase 5，§14/§19）：分析文章 → 推荐配图位置/画面/理由；AI 只建议，小编决策
+  image_suggestions: (p) => [
+    { role: 'system', content: '你是公众号配图顾问，擅长根据文章节奏规划配图位置与画面内容，建议务实可拍（校园场景可执行）。' },
+    {
+      role: 'user',
+      content: `分析以下推文，推荐配图方案。
+标题：${p.title || '（无）'}
+摘要：${p.summary || '（无）'}
+正文：${(p.content || '').slice(0, 1500)}
+素材亮点：${JSON.stringify(p.material?.highlights || []) || '（无）'}
+
+输出 2-4 条建议，严格按 JSON 数组输出，不要任何其他文字，不要 markdown 代码块包裹，如：
+[{"position":1,"description":"开幕式全景","reason":"增强开场现场感"}]
+要求：position 从 1 开始按正文顺序；description 是具体画面描述（10 字内，用于拍摄或选图，会填入配图计划）；reason 一句话说明为什么放这个位置。`,
+    },
+  ],
 };
