@@ -89,3 +89,28 @@ update tasks set
   layout_theme = try_jsonb(theme),
   theme = '主题待补'
 where theme like '{%' and try_jsonb(theme) ? 'id' and layout_theme is null;
+
+-- ========== v5 增量迁移（V1.0 Phase 2 图片系统，幂等，可重复执行） ==========
+-- 图片元数据表：文件在 Storage，表只存 URL 与绑定关系（图片二进制绝不进 tasks）
+create table if not exists article_images (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references tasks(id) on delete cascade,  -- 任务删除时图片记录级联清理
+  url text not null,
+  type text not null check (type in ('cover', 'content')),      -- cover=封面 content=正文配图
+  position int not null default 0,                               -- 正文图片顺序（封面恒为 0）
+  caption text,                                                  -- 图片说明（对应 [配图：xxx] 占位）
+  source text not null default 'upload' check (source in ('upload', 'ai')), -- 来源：上传或 AI 生成
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_article_images_task on article_images(task_id);
+
+-- updated_at 自动更新（复用 v1 已建的 touch_updated_at 函数；PG 无 create trigger if not exists，用 drop+create 保证幂等）
+drop trigger if exists article_images_touch on article_images;
+create trigger article_images_touch before update on article_images
+for each row execute function touch_updated_at();
+
+-- Storage bucket：public 读（公众号预览 <img> 直读），写走 service_role（函数层口令门）
+insert into storage.buckets (id, name, public)
+values ('article-images', 'article-images', true)
+on conflict (id) do nothing;

@@ -30,8 +30,8 @@ async function loadHandler(name) {
 }
 
 createServer(async (req, res) => {
-  // 提取函数名：/api/tasks?x=1 → tasks
-  const name = (req.url || '').replace(/^\/api\//, '').split('?')[0];
+  // 提取函数名：/api/images/abc?x=1 → images（子路径 /abc 透传给函数自行解析）
+  const name = (req.url || '').replace(/^\/api\//, '').split('?')[0].split('/')[0];
   const jsonHeaders = { 'Content-Type': 'application/json' };
 
   if (!name || name.includes('/')) {
