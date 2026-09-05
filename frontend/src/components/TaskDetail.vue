@@ -1,11 +1,13 @@
 <script setup>
 import { ref, reactive, computed, nextTick, watch, onBeforeUnmount } from 'vue';
-import { request, uploadPDF } from '../api/client.js';
+import { request, uploadPDF, listImages } from '../api/client.js';
 import { markdownToWechatHTML, markdownToPlainText } from '../utils/wechat-format.js';
 import { THEMES } from '../utils/themes.js';
 import { normalizeLines, makeItem } from '../utils/checklist.mjs'; // 整改清单纯函数（与后端双份同步）
 import { computeSteps } from '../utils/steps.js'; // 流程步骤条纯函数（P1-3）
+import { buildPrecheck } from '../utils/precheck.js'; // 发布前检查纯函数（Phase 6，§20）
 import ThemeGallery from './ThemeGallery.vue'; // 模板画廊弹窗（批1）
+import ImageWorkspace from './ImageWorkspace.vue'; // 配图工作台（V1.0 Phase 3）
 import { normalizeSkin } from '../utils/skin.js'; // AI 皮肤输出清洗（B 批）
 
 const props = defineProps({ task: Object });
@@ -45,10 +47,9 @@ function cancelModal() {
 }
 
 // ========== 素材面板（策划书解析 + 人工补充） ==========
-const materialOpen = ref(false); // P1-4：默认收起降密度，有素材时头部显示摘要
 const parsing = ref(false);
 // 结构化素材：highlights/flow 面板中按行编辑，提交时拆数组
-const material = reactive({ name: '', time: '', location: '', target: '', meaning: '' });
+const material = reactive({ name: '', time: '', location: '', target: '', meaning: '', confirmed: false }); // confirmed=素材已核实（§15）
 const materialHighlightsText = ref('');
 const materialFlowText = ref('');
 const liveNotes = ref(''); // 现场亮点（AI 拿不到的信息）
@@ -61,6 +62,7 @@ function fillMaterial(m) {
   material.location = m?.location || '';
   material.target = m?.target || '';
   material.meaning = m?.meaning || '';
+  material.confirmed = m?.confirmed === true; // 已核实开关回填（§15 事实确认）
   materialHighlightsText.value = (m?.highlights || []).join('\n');
   materialFlowText.value = (m?.flow || []).join('\n');
   liveNotes.value = m?.liveNotes || '';
@@ -353,25 +355,34 @@ async function execRewrite(instruction) {
   }
 }
 
-// ========== 流程步骤条（P1-3：数据完备度驱动，纯引导不设闸） ==========
-// 五步完成度由纯函数按任务数据计算：选题=已建任务、素材/成稿看数据、排版/审核看状态
-const steps = computed(() => computeSteps(props.task));
-// 步骤 → 页面区块选择器映射（选题在头部无独立区块，点击不滚动）
-const STEP_ANCHORS = { topic: null, material: '.material-panel', draft: '.ai-toolbar', layout: '.editor-split', review: '.toolbar' };
-// 点击步骤：平滑滚动到对应区块（不拦截任何操作，不改变按钮可达性）
-function scrollToStep(key) {
-  const sel = STEP_ANCHORS[key];
-  if (!sel) return;
-  document.querySelector(sel)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+// ========== 工作流步骤导航（V1.0 Phase 1：分步引导工作台） ==========
+// 六步完成度由纯函数计算；activeStep 是本地 UI 态（当前展示哪一步的操作面板）
+// boundImages：配图工作台上报的绑定正文图（Phase 4 同源数据：步骤条计数 + 预览/复制渲染）
+// coverOk：是否有封面（Phase 6 发布前检查）
+const boundImages = ref([]);
+const coverOk = ref(false);
+const steps = computed(() => computeSteps(props.task, boundImages.value.length));
+const activeStep = ref(steps.value.find((s) => s.active)?.key || 'material');
+// 任务切换时落到计算出的当前步（纯展示切换，不触发保存链路）；绑定图清零待工作台重拉后回填
+watch(() => props.task.id, () => {
+  boundImages.value = [];
+  coverOk.value = false;
+  activeStep.value = steps.value.find((s) => s.active)?.key || 'material';
+});
+
+// 固定步序：上一步/下一步按此导航（纯 UI 引导，不做任何校验拦截）
+const STEP_ORDER = ['material', 'draft', 'images', 'layout', 'check', 'review'];
+const prevStep = computed(() => STEP_ORDER[STEP_ORDER.indexOf(activeStep.value) - 1] || null);
+const nextStep = computed(() => STEP_ORDER[STEP_ORDER.indexOf(activeStep.value) + 1] || null);
+const stepLabel = (key) => steps.value.find((s) => s.key === key)?.label || key;
+function gotoStep(key) {
+  activeStep.value = key;
 }
 
 // ========== 状态操作（详情页直接推进/打回，不必回列表） ==========
 
 const STATUS_TEXT = { writing: '写稿中', reviewing: '审核中', published: '已发布' };
-// 三态工作流：writing → reviewing → published（v2 淘汰"排版中"）
-const FLOW = ['writing', 'reviewing', 'published'];
-// 下一状态（published 无下一态，不显示推进按钮）
-const nextStatus = computed(() => FLOW[FLOW.indexOf(props.task.status) + 1] || null);
+// 三态工作流：writing → reviewing → published（v2 淘汰"排版中"；推进按钮在检查/审核步骤内按状态显示）
 
 // 状态变更：先保存最新内容（确保门禁检查当前编辑态），成功后刷新；失败展示完整整改清单
 async function changeStatus(next) {
@@ -457,6 +468,16 @@ async function toggleChecklistItem(item) {
 // ========== 规范检查 ==========
 
 const report = ref(null);
+
+// 发布前检查清单（Phase 6，§20）：本地可算项实时刷新；规范检查项需点按钮跑一次
+// 用当前编辑态（title/summary/content/material）+ 配图工作台上报状态计算
+const precheckItems = computed(() =>
+  buildPrecheck(
+    { title: title.value, summary: summary.value, content: content.value, material: materialPayload() },
+    { coverOk: coverOk.value, boundCount: boundImages.value.length, report: report.value },
+  ),
+);
+const precheckReady = computed(() => precheckItems.value.every((i) => i.ok));
 
 // 先保存最新内容再检查，保证检查的是当前编辑态
 async function runCheck() {
@@ -556,9 +577,10 @@ const themeSnapshot = computed(() => JSON.stringify({ id: themeId.value, overrid
 watch(themeSnapshot, () => scheduleAutoSave());
 
 // 右侧实时预览：Markdown → 手账卡片风 HTML（标题卡取标题字段，眉标用任务类型；overrides 传令牌覆盖）
+// images：配图工作台上报的绑定图（Phase 4 与复制/分享同源，占位→真实 <img>）
 const wechatHTML = computed(() =>
   markdownToWechatHTML(content.value, themeId.value, {
-    title: title.value, eyebrow: props.task.type, overrides: { ...themeOverrides },
+    title: title.value, eyebrow: props.task.type, overrides: { ...themeOverrides }, images: boundImages.value,
   }),
 );
 const copied = ref(false);
@@ -633,199 +655,296 @@ async function emitRefreshAndGet() {
   const fresh = data.tasks.find((t) => t.id === props.task.id);
   if (fresh) Object.assign(props.task, fresh);
 }
+
+// ========== 发布准备（V1.0 Phase 8，§23）：published 态人工发布四步 ==========
+const publishBox = reactive({ loading: false, error: '' });
+
+// 获取全部图片：封面 + 绑定正文图逐张下载（fetch blob → a[download]，文件名带位置与说明）
+async function downloadAllImages() {
+  publishBox.loading = true;
+  publishBox.error = '';
+  try {
+    const { images } = await listImages(props.task.id);
+    // 发布需要的图：封面 + 已绑定正文图（按 position 排序，封面恒排最前）
+    const need = images.filter((i) => i.type === 'cover' || (i.type === 'content' && i.position > 0))
+      .sort((a, b) => (a.type === 'cover' ? -1 : b.type === 'cover' ? 1 : a.position - b.position));
+    if (!need.length) {
+      publishBox.error = '本任务没有封面或正文图片';
+      return;
+    }
+    for (const img of need) {
+      // 公共 URL 直读（v5 bucket public）；Supabase 跨域已放行 CORS
+      const blob = await (await fetch(img.url)).blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const label = (img.caption || img.type).replace(/[\\/:*?"<>|\s]+/g, ''); // 文件名安全化
+      a.download = `${img.type === 'cover' ? '封面' : '第' + img.position + '图'}-${label}.${img.url.split('.').pop()}`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+  } catch (e) {
+    publishBox.error = '图片下载失败：' + e.message;
+  } finally {
+    publishBox.loading = false;
+  }
+}
 </script>
 
 <template>
   <section class="detail">
+    <!-- 头部：返回 + 标题行内编辑 + 状态 + 保存（标题随时可改，自动保存兜底） -->
     <div class="detail-head">
       <button class="back" @click="emit('back')">← 返回列表</button>
-      <h2>{{ task.theme }}</h2>
+      <input v-model="title" class="head-title" placeholder="推文标题（可点 AI 生成）" />
       <span class="status-tag" :class="task.status">{{ STATUS_TEXT[task.status] || task.status }}</span>
+      <button :disabled="saving" @click="save()">{{ saving ? '保存中…' : '保存' }}</button>
+      <span v-if="savedAt" class="saved">{{ autoSaved ? '已自动保存 ✓' : '已保存 ✓' }} {{ savedAt }}</span>
     </div>
 
-    <!-- 流程步骤条：引导不是闸门，不改变任何操作可达性 -->
+    <!-- 六步工作流步骤条：点击切换左侧操作面板（引导不是闸门，不改变任何操作可达性） -->
     <div class="steps-bar">
       <template v-for="(s, i) in steps" :key="s.key">
-        <span class="step" :class="{ done: s.done, active: s.active }"
-          @click="scrollToStep(s.key)" :title="s.done ? '点击回到该区' : s.label">
+        <span class="step" :class="{ done: s.done, active: s.key === activeStep }" @click="gotoStep(s.key)"
+          :title="s.done ? '已完成，点击返回查看' : '点击切换到该步'">
           <i>{{ s.done ? '✓' : i + 1 }}</i>{{ s.label }}
         </span>
         <span v-if="i < steps.length - 1" class="step-arrow">›</span>
       </template>
     </div>
 
-    <!-- 素材面板：上传策划书 → AI 提取 → 人工补充 → 一键成稿 -->
-    <div class="material-panel">
-      <div class="panel-header" @click="materialOpen = !materialOpen">
-        📋 素材面板 {{ materialOpen ? '▼' : '▶' }}
-        <span v-if="!materialOpen && material.name" class="panel-summary">
-          已提取：{{ material.name }} · {{ (materialHighlightsText.match(/[^\n]+/g) || []).length }} 条亮点
-        </span>
-      </div>
-      <div v-if="materialOpen" class="panel-body">
-        <div class="upload-area">
-          <input type="file" accept=".pdf" :disabled="parsing" @change="onPDFUpload" />
-          <span v-if="parsing" class="parsing-hint">AI 正在解析策划书…{{ aiElapsed >= 8 ? `（已等待 ${aiElapsed} 秒）` : '' }}</span>
-          <span v-else-if="material.name" class="parsed-ok">已提取：{{ material.name }}</span>
-        </div>
-        <div v-if="material.name || materialHighlightsText" class="material-fields">
-          <label>活动名称</label>
-          <input v-model="material.name" />
-          <label>时间</label>
-          <input v-model="material.time" />
-          <label>地点</label>
-          <input v-model="material.location" />
-          <label>参与对象</label>
-          <input v-model="material.target" />
-          <label>活动亮点<br />（每行一条）</label>
-          <textarea v-model="materialHighlightsText" rows="3"></textarea>
-          <label>活动流程<br />（每行一条）</label>
-          <textarea v-model="materialFlowText" rows="3"></textarea>
-          <label>活动意义</label>
-          <textarea v-model="material.meaning" rows="2"></textarea>
-        </div>
-        <label>现场亮点/补充素材（AI 拿不到的信息）</label>
+    <!-- 全局错误/提示：所有步骤共用的操作反馈 -->
+    <p v-if="error" class="error">{{ error }}</p>
+
+    <!-- 工作台两栏：左=当前步骤操作区（随 activeStep 切换），右=公众号预览（常驻） -->
+    <div class="workbench">
+      <div class="step-panel">
+
+        <!-- ① 素材：上传策划书 → AI 提取 → 人工补充 → 一键成稿 -->
+        <div v-if="activeStep === 'material'" class="material-panel">
+          <div class="panel-body">
+            <div class="upload-area">
+              <input type="file" accept=".pdf" :disabled="parsing" @change="onPDFUpload" />
+              <span v-if="parsing" class="parsing-hint">AI 正在解析策划书…{{ aiElapsed >= 8 ? `（已等待 ${aiElapsed} 秒）` : '' }}</span>
+              <span v-else-if="material.name" class="parsed-ok">已提取：{{ material.name }}</span>
+            </div>
+            <div v-if="material.name || materialHighlightsText" class="material-fields">
+              <label>活动名称</label>
+              <input v-model="material.name" />
+              <label>时间</label>
+              <input v-model="material.time" />
+              <label>地点</label>
+              <input v-model="material.location" />
+              <label>参与对象</label>
+              <input v-model="material.target" />
+              <label>活动亮点<br />（每行一条）</label>
+              <textarea v-model="materialHighlightsText" rows="3"></textarea>
+              <label>活动流程<br />（每行一条）</label>
+              <textarea v-model="materialFlowText" rows="3"></textarea>
+              <label>活动意义</label>
+              <textarea v-model="material.meaning" rows="2"></textarea>
+            </div>
+            <label>现场亮点/补充素材（AI 拿不到的信息）</label>
         <textarea v-model="liveNotes" rows="2" placeholder="活动现场的实际情况、精彩瞬间、数据等"></textarea>
-        <label>照片说明（用于配图占位）</label>
-        <textarea v-model="photoNotes" rows="2" placeholder="如：开场全景、互动特写、全场大合唱"></textarea>
+        <!-- 事实确认开关（§15）：勾选后随素材持久化；发布前检查必检项 -->
+        <label class="confirm-facts">
+          <input type="checkbox" v-model="material.confirmed" />
+          素材已核实（关键事实与策划方/现场确认无误，未确认信息已修正或删除）
+        </label>
         <button class="generate-full" :disabled="!material.name || !!aiLoading" @click="generateFullDraft">
-          {{ aiLoading === 'draft_from_material' ? '生成中…' : '✨ 一键成稿（基于素材）' }}
-        </button>
+              {{ aiLoading === 'draft_from_material' ? '生成中…' : '✨ 一键成稿（基于素材）' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- ② 写稿：摘要 + AI 工具条 + 正文 Markdown 编辑 -->
+        <template v-else-if="activeStep === 'draft'">
+          <label>摘要</label>
+          <textarea v-model="summary" rows="2" placeholder="公众号推送摘要（可点 AI 生成）"></textarea>
+          <div class="ai-toolbar">
+            <button :disabled="!!aiLoading" @click="generateDraft">
+              {{ aiLoading === 'draft' ? '生成中…' : 'AI 初稿' }}
+            </button>
+            <button :disabled="!!aiLoading" @click="generateTitles">
+              {{ aiLoading === 'title' ? '生成中…' : 'AI 改标题' }}
+            </button>
+            <button :disabled="!!aiLoading" @click="generateSummary">
+              {{ aiLoading === 'summary' ? '生成中…' : 'AI 摘要' }}
+            </button>
+            <button :disabled="!!aiLoading" @click="rewriteSelection">
+              {{ aiLoading === 'rewrite' ? '改写中…' : '选中改写' }}
+            </button>
+          </div>
+          <!-- P2-7：长任务等待提示，超 8 秒才出现，避免误以为卡死 -->
+          <p v-if="aiElapsed >= 8" class="ai-progress">
+            ⏳ AI 正在处理（已等待 {{ aiElapsed }} 秒）… 长文生成约需 10-25 秒，请勿离开本页
+          </p>
+          <div class="editor-left">
+            <textarea ref="contentRef" v-model="content" rows="24" placeholder="正文 Markdown：## 小节、> 金句、[配图：说明]、文末署名"></textarea>
+            <p class="word-count">{{ content.length }} 字</p>
+          </div>
+        </template>
+
+        <!-- ③ 配图：封面/槽位/图片库工作台；photoNotes/content 双向绑定走既有自动保存链路 -->
+        <template v-else-if="activeStep === 'images'">
+          <ImageWorkspace :task-id="task.id" v-model:photo-notes="photoNotes" v-model:content="content"
+            :title="title" :summary="summary" :material="materialPayload()"
+            @bound-change="boundImages = $event" @cover-change="coverOk = $event" />
+        </template>
+
+        <!-- ④ 排版：模板/画廊/AI配色/调参数，右侧预览实时刷新 -->
+        <template v-else-if="activeStep === 'layout'">
+          <div class="layout-controls">
+            <select v-model="themeId" title="模板皮肤">
+              <option v-for="(t, k) in THEMES" :key="k" :value="k">{{ t.label }}</option>
+            </select>
+            <button class="param-toggle" @click="galleryOpen = true" title="浏览全部模板效果">
+              🖼 画廊
+            </button>
+            <button class="param-toggle" @click="openSkinModal" title="AI 按描述生成配色">
+              ✨ AI 配色
+            </button>
+            <button class="param-toggle" @click="panelOpen = !panelOpen" title="排版参数">
+              {{ panelOpen ? '收起参数' : '🎨 调参数' }}
+            </button>
+          </div>
+          <!-- 参数面板：色板 + 滑杆，即时反映预览（只调令牌，不碰复制链路） -->
+          <div v-if="panelOpen" class="param-panel">
+            <div v-for="f in OVERRIDES_SCHEMA" :key="f.key" class="param-row">
+              <label class="param-label">{{ f.label }}</label>
+              <input v-if="f.type === 'color'" type="color" v-model="themeOverrides[f.key]" />
+              <template v-else>
+                <input type="range" :min="f.min" :max="f.max" :step="f.step" v-model.number="themeOverrides[f.key]" />
+                <span class="param-val">{{ themeOverrides[f.key] ?? '默认' }}{{ f.unit }}</span>
+              </template>
+            </div>
+            <button class="param-reset" @click="() => { for (const k of Object.keys(themeOverrides)) delete themeOverrides[k]; }">
+              恢复默认
+            </button>
+          </div>
+          <p class="step-hint">右侧预览实时反映排版效果，满意后进入下一步</p>
+        </template>
+
+        <!-- ⑤ 发布前检查（Phase 6，§20）：八项清单 + 🟢/🔴 状态 + 提交审核 -->
+        <template v-else-if="activeStep === 'check'">
+          <div class="precheck">
+            <div class="precheck-head">
+              <h3>发布前检查</h3>
+              <button :disabled="saving" @click="runCheck">规范检查</button>
+            </div>
+            <!-- 八项清单：✓ 已过 / ✗ 未过（附去哪一步修的提示） -->
+            <ul class="precheck-list">
+              <li v-for="item in precheckItems" :key="item.name" :class="item.ok ? 'ok' : 'bad'">
+                <span class="pc-mark">{{ item.ok ? '✓' : '✗' }}</span>
+                <span class="pc-name">{{ item.name }}</span>
+                <span v-if="!item.ok" class="pc-hint">{{ item.hint }}</span>
+              </li>
+            </ul>
+            <!-- 总状态：全绿可提交；有红项则阻断并列出（§30-④ 发现→告知→修复→才能提交） -->
+            <p class="precheck-state" :class="precheckReady ? 'ready' : 'blocked'">
+              {{ precheckReady ? '🟢 全部通过，可以提交审核' : '🔴 有未通过项，修复后再提交审核' }}
+            </p>
+            <!-- 提交审核：八项全过 + 整改清单清零（体验层；后端 rules-engine 为真门禁） -->
+            <button v-if="task.status === 'writing'" class="status-btn submit-btn"
+              :disabled="!precheckReady || checklistRemaining > 0"
+              :title="checklistRemaining > 0 ? `整改清单还剩 ${checklistRemaining} 条` : (!precheckReady ? '按上方清单逐项修复' : '')"
+              @click="changeStatus('reviewing')">
+              提交审核 →
+            </button>
+          </div>
+          <!-- 检查报告：规范检查的详细结果（可行动的整改清单） -->
+          <div v-if="report" class="report" :class="report.passed ? 'ok' : 'fail'">
+            <p>{{ report.passed ? '规范检查通过' : '存在 ' + report.errors.length + ' 个必须整改项' }}</p>
+            <ul v-if="report.errors.length">
+              <li v-for="(i, n) in report.errors" :key="'e' + n" class="err">【必须】{{ i.message }} —— {{ i.hint }}</li>
+            </ul>
+            <ul v-if="report.warnings.length">
+              <li v-for="(i, n) in report.warnings" :key="'w' + n" class="warn">【建议】{{ i.message }} —— {{ i.hint }}</li>
+            </ul>
+          </div>
+          <!-- 整改清单：打回时生成，逐条勾销，清零才能推回审核（仅写稿中且有清单时显示） -->
+          <div v-if="checklist.length && task.status === 'writing'" class="checklist">
+            <h3>整改清单（剩 {{ checklistRemaining }}/{{ checklist.length }}）</h3>
+            <ul>
+              <li v-for="item in checklist" :key="item.id" :class="{ done: item.done }">
+                <label>
+                  <input type="checkbox" :checked="item.done" @change="toggleChecklistItem(item)" />
+                  {{ item.text }}
+                </label>
+              </li>
+            </ul>
+            <p v-if="checklistRemaining === 0" class="checklist-ok">✓ 全部完成，可推进到审核</p>
+          </div>
+          <p v-if="task.status !== 'writing'" class="step-hint">
+            {{ task.status === 'reviewing' ? '已提交审核，审核操作见第 ⑥ 步' : '已发布，检查记录仅供回看' }}
+          </p>
+        </template>
+
+        <!-- ⑥ 审核：状态推进/打回 + 分享链接 + 批注；published 态 = 发布准备（Phase 8，§23） -->
+        <template v-else>
+          <!-- 发布准备：审核通过后的人工发布四步（复制 → 取图 → 公众号后台 → 已标记发布） -->
+          <div v-if="task.status === 'published'" class="publish-box">
+            <h3>🚀 发布准备（已标记为已发布）</h3>
+            <p class="publish-steps">① 复制文章 → ② 获取全部图片 → ③ 打开公众号后台粘贴并上传图片 → ④ 发布</p>
+            <div class="publish-actions">
+              <button class="copy-wechat" :disabled="!content" @click="copyToWechat">
+                {{ copied ? '✓ 已复制，去公众号粘贴' : '📋 复制文章' }}
+              </button>
+              <button :disabled="publishBox.loading" @click="downloadAllImages">
+                {{ publishBox.loading ? '下载中…' : '⬇ 获取全部图片' }}
+              </button>
+              <a href="https://mp.weixin.qq.com" target="_blank" rel="noopener">↗ 打开微信公众号后台</a>
+            </div>
+            <p v-if="publishBox.error" class="error">{{ publishBox.error }}</p>
+            <p class="step-hint">图片按「封面 / 第N图-说明」命名逐张下载；公众号后台粘贴正文后按对应位置上传</p>
+          </div>
+          <div class="review-actions">
+            <button v-if="task.status === 'reviewing'" class="status-btn" @click="changeStatus('published')">
+              审核通过，推进为已发布 →
+            </button>
+            <button v-if="task.status === 'reviewing'" class="status-btn reject" @click="openRejectModal">
+              打回修改
+            </button>
+            <button v-if="task.status !== 'published'" class="status-btn share" @click="generateShareLink">
+              生成分享链接（发审核人）
+            </button>
+          </div>
+          <!-- 分享链接展示 + 复制（生成后显示） -->
+          <div v-if="shareLink" class="share-link">
+            <a :href="shareLink" target="_blank" rel="noopener">{{ shareLink }}</a>
+            <button @click="copyShareLink">复制</button>
+          </div>
+          <!-- 批注区：写作者留言/审核人批注 -->
+          <div class="comments">
+            <h3>批注（{{ (task.comments || []).length }}）</h3>
+            <ul>
+              <li v-for="(c, n) in task.comments" :key="n">
+                <b>{{ c.by }}</b>：{{ c.text }}<span class="at">{{ (c.at || '').slice(5, 16).replace('T', ' ') }}</span>
+              </li>
+            </ul>
+            <div class="add-comment">
+              <input v-model="commentText" placeholder="留言/批注，如：第二段数据请核实" @keyup.enter="addComment" />
+              <button @click="addComment">提交</button>
+            </div>
+          </div>
+        </template>
       </div>
-    </div>
 
-    <label>标题</label>
-    <input v-model="title" placeholder="推文标题（可点 AI 生成）" />
-
-    <label>摘要</label>
-    <textarea v-model="summary" rows="2" placeholder="公众号推送摘要（可点 AI 生成）"></textarea>
-
-    <!-- 分区标题：明确主区为成稿编辑区（P1-4 降密度，只加层级不重排） -->
-    <h3 class="zone-title">✍️ 成稿编辑</h3>
-
-    <div class="ai-toolbar">
-      <button :disabled="!!aiLoading" @click="generateDraft">
-        {{ aiLoading === 'draft' ? '生成中…' : 'AI 初稿' }}
-      </button>
-      <button :disabled="!!aiLoading" @click="generateTitles">
-        {{ aiLoading === 'title' ? '生成中…' : 'AI 改标题' }}
-      </button>
-      <button :disabled="!!aiLoading" @click="generateSummary">
-        {{ aiLoading === 'summary' ? '生成中…' : 'AI 摘要' }}
-      </button>
-      <button :disabled="!!aiLoading" @click="rewriteSelection">
-        {{ aiLoading === 'rewrite' ? '改写中…' : '选中改写' }}
-      </button>
-    </div>
-    <!-- P2-7：长任务等待提示，超 8 秒才出现，避免误以为卡死 -->
-    <p v-if="aiElapsed >= 8" class="ai-progress">
-      ⏳ AI 正在处理（已等待 {{ aiElapsed }} 秒）… 长文生成约需 10-25 秒，请勿离开本页
-    </p>
-
-    <!-- 左右分栏：左 Markdown 编辑，右微信排版实时预览 -->
-    <div class="editor-split">
-      <div class="editor-left">
-        <textarea ref="contentRef" v-model="content" rows="24" placeholder="正文 Markdown：## 小节、> 金句、[配图：说明]、文末署名"></textarea>
-        <p class="word-count">{{ content.length }} 字</p>
-      </div>
-      <div class="editor-right">
+      <!-- 常驻公众号预览：排版/写稿改动实时反映；复制按钮随时可用 -->
+      <div class="preview-pane">
         <div class="preview-header">
-          <select v-model="themeId" title="模板皮肤">
-            <option v-for="(t, k) in THEMES" :key="k" :value="k">{{ t.label }}</option>
-          </select>
-          <button class="param-toggle" @click="galleryOpen = true" title="浏览全部模板效果">
-            🖼 画廊
-          </button>
-          <button class="param-toggle" @click="openSkinModal" title="AI 按描述生成配色">
-            ✨ AI 配色
-          </button>
-          <button class="param-toggle" @click="panelOpen = !panelOpen" title="排版参数">
-            {{ panelOpen ? '收起参数' : '🎨 调参数' }}
-          </button>
+          <span class="preview-tag">📱 公众号预览</span>
           <button class="copy-wechat" :disabled="!content" @click="copyToWechat">
             {{ copied ? '✓ 已复制，去公众号粘贴' : '📋 复制到公众号' }}
-          </button>
-        </div>
-        <!-- 参数面板：色板 + 滑杆，即时反映预览（只调令牌，不碰复制链路） -->
-        <div v-if="panelOpen" class="param-panel">
-          <div v-for="f in OVERRIDES_SCHEMA" :key="f.key" class="param-row">
-            <label class="param-label">{{ f.label }}</label>
-            <input v-if="f.type === 'color'" type="color" v-model="themeOverrides[f.key]" />
-            <template v-else>
-              <input type="range" :min="f.min" :max="f.max" :step="f.step" v-model.number="themeOverrides[f.key]" />
-              <span class="param-val">{{ themeOverrides[f.key] ?? '默认' }}{{ f.unit }}</span>
-            </template>
-          </div>
-          <button class="param-reset" @click="() => { for (const k of Object.keys(themeOverrides)) delete themeOverrides[k]; }">
-            恢复默认
           </button>
         </div>
         <div class="preview-body" v-html="wechatHTML"></div>
       </div>
     </div>
-    <p v-if="error" class="error">{{ error }}</p>
 
-    <div class="toolbar">
-      <button :disabled="saving" @click="save()">{{ saving ? '保存中…' : '保存' }}</button>
-      <button :disabled="saving" @click="runCheck">规范检查</button>
-      <!-- 状态操作：按当前状态显示推进/打回 -->
-      <!-- 推回审核受整改清单门禁：有未完成条目时置灰（体验层，后端 400 为真门禁） -->
-      <button v-if="nextStatus" class="status-btn" :disabled="nextStatus === 'reviewing' && checklistRemaining > 0"
-        :title="nextStatus === 'reviewing' && checklistRemaining > 0 ? `整改清单还剩 ${checklistRemaining} 条` : ''"
-        @click="changeStatus(nextStatus)">
-        推进为{{ STATUS_TEXT[nextStatus] }} →
-      </button>
-      <button v-if="task.status === 'reviewing'" class="status-btn reject" @click="openRejectModal">
-        打回修改
-      </button>
-      <button v-if="task.status !== 'published'" class="status-btn share" @click="generateShareLink">
-        生成分享链接
-      </button>
-      <span v-if="savedAt" class="saved">{{ autoSaved ? '已自动保存' : '已保存' }} {{ savedAt }}</span>
-    </div>
-    <!-- 分享链接展示 + 复制（生成后显示） -->
-    <div v-if="shareLink" class="share-link">
-      <a :href="shareLink" target="_blank" rel="noopener">{{ shareLink }}</a>
-      <button @click="copyShareLink">复制</button>
-    </div>
-
-    <!-- 检查报告：可行动的整改清单 -->
-    <div v-if="report" class="report" :class="report.passed ? 'ok' : 'fail'">
-      <p>{{ report.passed ? '检查通过，可推进到审核' : '存在 ' + report.errors.length + ' 个必须整改项' }}</p>
-      <ul v-if="report.errors.length">
-        <li v-for="(i, n) in report.errors" :key="'e' + n" class="err">【必须】{{ i.message }} —— {{ i.hint }}</li>
-      </ul>
-      <ul v-if="report.warnings.length">
-        <li v-for="(i, n) in report.warnings" :key="'w' + n" class="warn">【建议】{{ i.message }} —— {{ i.hint }}</li>
-      </ul>
-    </div>
-
-    <!-- 整改清单：打回时生成，逐条勾销，清零才能推回审核（仅写稿中且有清单时显示） -->
-    <div v-if="checklist.length && task.status === 'writing'" class="checklist">
-      <h3>整改清单（剩 {{ checklistRemaining }}/{{ checklist.length }}）</h3>
-      <ul>
-        <li v-for="item in checklist" :key="item.id" :class="{ done: item.done }">
-          <label>
-            <input type="checkbox" :checked="item.done" @change="toggleChecklistItem(item)" />
-            {{ item.text }}
-          </label>
-        </li>
-      </ul>
-      <p v-if="checklistRemaining === 0" class="checklist-ok">✓ 全部完成，可推进到审核</p>
-    </div>
-
-    <!-- 批注区：写作者留言/审核人批注 -->
-    <div class="comments">
-      <h3>批注（{{ (task.comments || []).length }}）</h3>
-      <ul>
-        <li v-for="(c, n) in task.comments" :key="n">
-          <b>{{ c.by }}</b>：{{ c.text }}<span class="at">{{ (c.at || '').slice(5, 16).replace('T', ' ') }}</span>
-        </li>
-      </ul>
-      <div class="add-comment">
-        <input v-model="commentText" placeholder="留言/批注，如：第二段数据请核实" @keyup.enter="addComment" />
-        <button @click="addComment">提交</button>
-      </div>
+    <!-- 底部步骤导航：纯 UI 引导，不做校验拦截 -->
+    <div class="step-nav">
+      <button :disabled="!prevStep" @click="gotoStep(prevStep)">← 上一步{{ prevStep ? '：' + stepLabel(prevStep) : '' }}</button>
+      <button class="next" :disabled="!nextStep" @click="gotoStep(nextStep)">下一步{{ nextStep ? '：' + stepLabel(nextStep) : '' }} →</button>
     </div>
 
     <!-- 通用输入弹窗：替代原生 prompt（嵌入式预览环境不支持） -->
@@ -911,7 +1030,6 @@ async function emitRefreshAndGet() {
 <style scoped>
 .detail { display: flex; flex-direction: column; gap: 8px; }
 .detail-head { display: flex; align-items: center; gap: 12px; }
-.detail-head h2 { margin: 0; flex: 1; font-size: 18px; }
 .back { align-self: flex-start; }
 .status-tag { font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #eee; color: #666; white-space: nowrap; }
 .status-tag.writing { background: #e8f0fe; color: #1a73e8; }
@@ -921,11 +1039,9 @@ label { font-size: 13px; color: #666; margin-top: 8px; }
 input, textarea, select { padding: 8px 10px; font-family: inherit; }
 textarea { resize: vertical; }
 
-/* 素材面板 */
+/* 素材面板（工作台①：面板常展开，无折叠头） */
 .material-panel { border: 1px solid #e6e2d9; border-radius: 8px; overflow: hidden; }
-.panel-header { padding: 10px 12px; background: #faf8f3; cursor: pointer; font-weight: 600; font-size: 14px; user-select: none; }
-.panel-summary { font-size: 12px; color: #999; margin-left: 8px; font-weight: 400; } /* 收起态摘要：活动名+亮点条数 */
-.panel-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #f0ede5; }
+.panel-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .upload-area { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .parsing-hint { color: #1a73e8; font-size: 13px; }
 .parsed-ok { color: #27ae60; font-size: 13px; }
@@ -934,21 +1050,34 @@ textarea { resize: vertical; }
 .generate-full { padding: 10px; background: #27ae60; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
 .generate-full:disabled { background: #a8d5bd; cursor: not-allowed; }
 
-/* 左右分栏编辑区 */
-.editor-split { display: flex; gap: 12px; align-items: stretch; margin-top: 4px; }
+/* 工作台两栏：左=步骤操作区（随 activeStep 切换），右=预览常驻 */
+.workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.step-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* 写稿步的正文编辑区（随左栏伸缩） */
 .editor-left { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .editor-left textarea { flex: 1; }
-.editor-right { flex: 1; display: flex; flex-direction: column; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; min-width: 0; }
+/* 常驻预览面板：随窗口滚动吸附视口 */
+.preview-pane { border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; position: sticky; top: 12px; min-width: 0; }
+.preview-tag { font-size: 13px; font-weight: 600; color: #555; }
 .preview-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; background: #fafafa; border-bottom: 1px solid #eee; }
-.preview-header select { padding: 4px 8px; font-size: 13px; }
 .copy-wechat { padding: 6px 12px; background: #1e88e5; color: #fff; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }
 .copy-wechat:disabled { background: #bbb; }
-.preview-body { overflow-y: auto; max-height: 660px; background: #ebebeb; }
+.preview-body { overflow-y: auto; max-height: 620px; background: #ebebeb; }
 .word-count { color: #999; font-size: 12px; margin: 0; }
+/* 排版步控制条 + 检查/审核步操作行 */
+.layout-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.layout-controls select { padding: 6px 8px; font-size: 13px; }
+.check-actions, .review-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 头部标题行内编辑 */
+.head-title { flex: 1; font-size: 16px; font-weight: 600; min-width: 120px; }
+/* 步骤提示行 */
+.step-hint { font-size: 12px; color: #999; margin: 0; }
+/* 底部步骤导航：上一步灰置，下一步主按钮 */
+.step-nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.step-nav .next { background: #1e88e5; color: #fff; border: none; border-radius: 4px; padding: 8px 20px; cursor: pointer; }
+.step-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.toolbar { display: flex; align-items: center; gap: 12px; }
-.saved { color: #27ae60; font-size: 13px; }
-.zone-title { font-size: 14px; color: #555; margin: 12px 0 4px; border-left: 3px solid #53de7b; padding-left: 8px; } /* 分区标题（P1-4） */
+.saved { color: #27ae60; font-size: 13px; white-space: nowrap; }
 .ai-toolbar { display: flex; gap: 8px; margin-top: 4px; }
 .ai-toolbar button { padding: 6px 12px; }
 /* P2-7：AI 等待进度提示 */
@@ -982,15 +1111,16 @@ textarea { resize: vertical; }
 .share-link a { color: #8e44ad; word-break: break-all; }
 .share-link button { padding: 4px 10px; }
 
-/* 窄屏：编辑与预览改为上下布局 */
+/* 窄屏：工作台两栏改上下堆叠，预览不再吸附（延续 C 批响应式结论） */
 @media (max-width: 768px) {
-  .editor-split { flex-direction: column; }
+  .workbench { grid-template-columns: 1fr; }
+  .preview-pane { position: static; }
   .preview-body { max-height: 480px; }
   /* C 批：工具条/预览头/AI工具条/详情头换行，多按钮不再溢出 */
   .detail-head { flex-wrap: wrap; }
-  .toolbar { flex-wrap: wrap; }
   .preview-header { flex-wrap: wrap; }
   .ai-toolbar { flex-wrap: wrap; }
+  .step-nav { flex-wrap: wrap; }
 }
 
 /* 排版参数面板（P0-1）：编辑器侧 UI，非微信预览内容 */
@@ -1004,6 +1134,34 @@ textarea { resize: vertical; }
 .param-reset { grid-column: 1 / -1; font-size: 12px; color: #999; }
 
 /* 整改清单（P0-2）：打回生成的待勾销条目区 */
+/* 发布前检查（Phase 6，§20）：八项清单 + 总状态 */
+.precheck { border: 1px solid #d8e4f8; border-radius: 8px; padding: 12px 14px; background: #fbfdff; }
+.precheck-head { display: flex; align-items: center; justify-content: space-between; }
+.precheck-head h3 { margin: 0; font-size: 15px; }
+.precheck-list { list-style: none; padding: 0; margin: 10px 0; }
+.precheck-list li { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px dashed #eef2f8; }
+.precheck-list li:last-child { border-bottom: none; }
+.pc-mark { width: 18px; text-align: center; flex-shrink: 0; }
+.precheck-list .ok .pc-mark { color: #27ae60; }
+.precheck-list .bad .pc-mark { color: #c0392b; }
+.pc-name { font-size: 14px; color: #333; flex-shrink: 0; }
+.precheck-list .bad .pc-name { color: #c0392b; }
+.pc-hint { font-size: 12px; color: #b7791f; }
+.precheck-state { font-size: 14px; font-weight: bold; margin: 8px 0 12px; }
+.precheck-state.ready { color: #27ae60; }
+.precheck-state.blocked { color: #c0392b; }
+.submit-btn { font-size: 15px; padding: 8px 24px; }
+.submit-btn:disabled { background: #bbb; cursor: not-allowed; }
+/* 素材已核实开关（§15） */
+.confirm-facts { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #555; }
+.confirm-facts input { margin: 0; }
+/* 发布准备（Phase 8，§23）：published 态人工发布面板 */
+.publish-box { border: 1px solid #bfe3c8; background: #f4fbf6; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.publish-box h3 { margin: 0; font-size: 15px; color: #1e7e43; }
+.publish-steps { font-size: 13px; color: #555; margin: 0; }
+.publish-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.publish-actions button { padding: 8px 16px; font-size: 14px; cursor: pointer; }
+.publish-actions a { padding: 8px 16px; font-size: 14px; background: #27ae60; color: #fff; border-radius: 4px; text-decoration: none; white-space: nowrap; }
 .checklist { border: 1px solid #e6d9c8; border-radius: 8px; padding: 10px 14px; background: #fdf9f2; }
 .checklist h3 { margin: 0 0 8px; font-size: 14px; }
 .checklist ul { list-style: none; padding: 0; margin: 0; }
