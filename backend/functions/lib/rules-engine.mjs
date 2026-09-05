@@ -61,7 +61,54 @@ async function dbChecks(db, task) {
 export async function runChecks(db, task) {
   const a = builtinChecks(task);
   const b = await dbChecks(db, task);
-  const errors = [...a.errors, ...b.errors];
-  const warnings = [...a.warnings, ...b.warnings];
+  const c = await imageChecks(db, task);
+  const errors = [...a.errors, ...b.errors, ...c.errors];
+  const warnings = [...a.warnings, ...b.warnings, ...c.warnings];
   return { errors, warnings, passed: errors.length === 0 };
+}
+
+// 发布前图片/事实检查（V1.0 Phase 4 §13 + Phase 6 §15/§20）：
+// 配图占位必须有绑定图（error）；封面必须设置（Phase 6 升 error）；有素材须确认事实（§15）
+async function imageChecks(db, task) {
+  const issues = { errors: [], warnings: [] };
+  if (!task.id || !db) return issues; // 无任务上下文时跳过（防单测外调用出错）
+
+  const { data: images } = await db
+    .from('article_images')
+    .select('type, position')
+    .eq('task_id', task.id);
+  const imgs = images || [];
+
+  // 封面必检（§20）：缺失 = error 阻断提交
+  if (!imgs.some((i) => i.type === 'cover')) {
+    issues.errors.push({
+      rule: '封面',
+      message: '未设置封面图',
+      hint: '公众号推送必需封面，去第③步配图上传（建议 900×383）',
+    });
+  }
+
+  // 事实确认（§15）：有素材但未勾"已核实" = error（AI 基于未确认素材写稿有编造风险）
+  const hasMaterial = !!(task.material?.name || (task.material?.highlights || []).length);
+  if (hasMaterial && task.material?.confirmed !== true) {
+    issues.errors.push({
+      rule: '事实确认',
+      message: '素材信息尚未核实确认',
+      hint: '去第①步素材面板勾选「素材已核实」，或修正/删除未确认信息',
+    });
+  }
+
+  // 配图绑定（§13）：占位数 > 绑定数 = error（带占位送审 = 发布时露缺图提示）
+  const imgMarks = ((task.content || '').match(/\[配图[^\]]*\]/g) || []).length;
+  if (imgMarks > 0) {
+    const boundCount = imgs.filter((i) => i.type === 'content' && i.position > 0).length;
+    if (boundCount < imgMarks) {
+      issues.errors.push({
+        rule: '配图绑定',
+        message: `有 ${imgMarks - boundCount} 处配图占位未绑定图片`,
+        hint: '去第③步配图为每个占位槽选择或上传图片，或删除多余占位',
+      });
+    }
+  }
+  return issues;
 }

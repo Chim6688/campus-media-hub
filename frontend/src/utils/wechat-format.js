@@ -113,9 +113,18 @@ function footerCard(theme, text) {
 </section>`;
 }
 
-// 配图占位框（整段占位时）
-function imagePlaceholder(theme, desc) {
-  return `<section style="margin:16px 8px 36px;padding:24px 20px;border:2px dashed #ccc;border-radius:8px;text-align:center;color:#999;font-size:13px;background:${theme.cardBg};">📷 配图：${esc(desc)}<br><span style="font-size:11px;">（去公众号后台上传图片替换此占位）</span></section>`;
+// 配图槽位（V1.0 Phase 4）：第 N 个整段占位 = 槽位 N
+// 已绑定 → 真实 <img>（预览/复制/分享同源）；未绑定 → 缺图提示占位（绝不渲染假图）
+function imageSlot(theme, desc, img) {
+  if (img) {
+    // 真实图：全宽圆角 + 可选说明条（说明优先取图片 caption，缺省用占位描述）
+    const cap = (img.caption || '').trim() || desc;
+    const capHtml = cap
+      ? `<p style="font-size:12px;color:${theme.creamText};text-align:center;margin:6px 0 0;">${esc(cap)}</p>`
+      : '';
+    return `<section style="margin:16px 8px 36px;"><img src="${esc(img.url)}" alt="${esc(cap || '配图')}" style="width:100%;display:block;border-radius:${theme.radius}px;border:1px solid ${theme.creamBorder};">${capHtml}</section>`;
+  }
+  return `<section style="margin:16px 8px 36px;padding:24px 20px;border:2px dashed #e67e22;border-radius:8px;text-align:center;color:#999;font-size:13px;background:${theme.cardBg};">📷 配图：${esc(desc)}<br><span style="font-size:11px;color:#e67e22;">（未绑定图片：去第③步配图选择或上传）</span></section>`;
 }
 
 // 列表条目：绿圆点（无序列表）
@@ -146,11 +155,15 @@ function refCard(theme, refs) {
 
 // ===== 主入口 =====
 
-// markdown: 正文 Markdown；opts.title/opts.eyebrow 用于文首标题卡（通常传任务标题+类型）
+// markdown: 正文 Markdown；opts.title/opts.eyebrow 用于文首标题卡；opts.images 为绑定正文图
+// （{position,url,caption}[]，Phase 3 槽位模型：第 N 个整段 [配图：] 占位 = 槽位 N）
 export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {}) {
   const theme = resolveTheme(themeId, opts.overrides); // 预设 + 用户覆盖合并后的完整令牌
   const tokens = marked.lexer(markdown || '');
   const refs = []; // 批3：全文链接收集（同 URL 复用序号）
+  // Phase 4：position → 绑定图片映射（稀疏绑定场景按 position 精确查）
+  const imageByPos = new Map((opts.images || []).map((i) => [i.position, i]));
+  let slotIdx = 0; // 整段占位出现次序（第 1 个占位 = 槽位 1）
   const parts = [];
   let sectionNum = 0; // 小节/子标题共用递增序号（01/02/03...）
   let inInfoSection = false; // 是否处于"核心信息"类小节内
@@ -184,7 +197,9 @@ export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {
       case 'paragraph': {
         const text = extractLinks((tok.text || '').trim(), refs);
         if (isPlaceholderPara(text)) {
-          parts.push(imagePlaceholder(theme, text.replace(/^\[配图[：:]\s*/, '').replace(/\]$/, '')));
+          // 第 N 个整段占位 = 槽位 N：绑定则渲染真实图，未绑定显示缺图提示
+          slotIdx += 1;
+          parts.push(imageSlot(theme, text.replace(/^\[配图[：:]\s*/, '').replace(/\]$/, ''), imageByPos.get(slotIdx) || null));
         } else if (isFooterPara(text)) {
           parts.push(footerCard(theme, text));
         } else if (inInfoSection) {

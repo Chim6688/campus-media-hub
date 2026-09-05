@@ -92,3 +92,50 @@ test('extractLinks 纯函数：非 http(s) 链接不动（防误伤相对路径�
   assert.equal(refs.length, 1, '只收 http(s) 链接');
   assert.ok(out.includes('官网〔1〕'), 'http链接转标记');
 });
+
+// ========== V1.0 Phase 4：占位 → 槽位绑定图片 ==========
+// 槽位模型：正文中第 N 个整段 [配图：] 占位 = 槽位 N，按 position 映射绑定图片
+const IMG_SAMPLE = `# 眉标｜测试标题
+正文第一段。
+
+[配图：开场全景]
+
+更多正文。
+
+[配图：互动特写]
+
+责编 | 张三`;
+
+test('Phase4：绑定槽位渲染真实 img + caption（V1.0 §13）', () => {
+  const out = markdownToWechatHTML(IMG_SAMPLE, 'greenPink', {
+    title: '测试标题',
+    images: [
+      { position: 1, url: 'https://x.supabase.co/a.jpg', caption: '开幕现场' },
+      { position: 2, url: 'https://x.supabase.co/b.jpg', caption: '' },
+    ],
+  });
+  assert.ok(out.includes('<img src="https://x.supabase.co/a.jpg"'), '第1槽渲染真实图');
+  assert.ok(out.includes('开幕现场'), '第1槽显示 caption');
+  assert.ok(out.includes('<img src="https://x.supabase.co/b.jpg"'), '第2槽渲染真实图');
+  assert.ok(!out.includes('📷 配图：'), '已绑定不再出现占位文案');
+});
+
+test('Phase4：未绑定槽位显示缺图提示，不渲染假图（V1.0 §13）', () => {
+  const out = markdownToWechatHTML(IMG_SAMPLE, 'greenPink', {
+    title: '测试标题',
+    images: [], // 全未绑定
+  });
+  assert.ok(out.includes('📷 配图：开场全景'), '保留占位说明（旧断言兼容）');
+  assert.ok(out.includes('未绑定'), '明确提示缺图');
+  assert.ok(!out.includes('<img'), '绝不渲染假图');
+});
+
+test('Phase4：position 稀疏时第 N 个占位查 position=N（解绑槽1绑槽2的场景）', () => {
+  const out = markdownToWechatHTML(IMG_SAMPLE, 'greenPink', {
+    title: '测试标题',
+    images: [{ position: 2, url: 'https://x.supabase.co/only2.jpg', caption: '' }],
+  });
+  // 第1个占位=槽1 未绑定 → 缺图提示；第2个占位=槽2 已绑定 → 真实图
+  assert.ok(out.includes('未绑定'), '槽1缺图提示');
+  assert.ok(out.includes('<img src="https://x.supabase.co/only2.jpg"'), '槽2渲染真实图');
+});
