@@ -10,17 +10,17 @@ const OK_TASK = {
   content: 'x'.repeat(400) + '\n[配图：a]',
   material: { name: '晚会', confirmed: true },
 };
-const OK_STATE = { coverOk: true, boundCount: 1, report: { passed: true, errors: [], warnings: [] } };
+const OK_STATE = { coverOk: true, boundCount: 1, visualOk: true, report: { passed: true, errors: [], warnings: [] } };
 
-test('基线：八项检查全部通过，ready=true', () => {
+test('基线：九项检查全部通过，ready=true', () => {
   const items = buildPrecheck(OK_TASK, OK_STATE);
-  assert.equal(items.length, 8);
+  assert.equal(items.length, 9);
   assert.ok(items.every((i) => i.ok));
 });
 
-test('检查项固定顺序与命名（标题/摘要/正文/事实确认/封面/正文配图/排版/规范检查）', () => {
+test('检查项固定顺序与命名（标题/摘要/正文/事实确认/封面/正文配图/视觉图/排版/规范检查）', () => {
   const items = buildPrecheck(OK_TASK, OK_STATE);
-  assert.deepEqual(items.map((i) => i.name), ['标题', '摘要', '正文', '事实确认', '封面', '正文配图', '排版', '规范检查']);
+  assert.deepEqual(items.map((i) => i.name), ['标题', '摘要', '正文', '事实确认', '封面', '正文配图', '视觉图', '排版', '规范检查']);
 });
 
 test('单项失败：各自 ok=false 且带 hint（去哪一步修）', () => {
@@ -60,4 +60,18 @@ test('规范检查判定：未跑过（report=null）不通过；跑过且 passe
 test('事实确认：无素材任务不要求（向后兼容）', () => {
   const items = buildPrecheck({ ...OK_TASK, material: {} }, OK_STATE);
   assert.equal(items.find((i) => i.name === '事实确认').ok, true);
+});
+
+test('视觉图判定（Phase 8）：visualOk=false 不通过且 hint 指引第④步；不影响其他项独立判定', () => {
+  const items = buildPrecheck(OK_TASK, { ...OK_STATE, visualOk: false });
+  const v = items.find((i) => i.name === '视觉图');
+  assert.equal(v.ok, false);
+  assert.ok(v.hint.includes('第④步'), 'hint 指引视觉步');
+  // 视觉图缺失不影响其他 8 项判定（单项独立）
+  assert.equal(items.filter((i) => i.ok).length, 8);
+});
+
+test('视觉图判定：visualOk 缺省（老调用方）= false 不通过（向后兼容）', () => {
+  const items = buildPrecheck(OK_TASK, { coverOk: true, boundCount: 1, report: { passed: true, errors: [], warnings: [] } });
+  assert.equal(items.find((i) => i.name === '视觉图').ok, false);
 });

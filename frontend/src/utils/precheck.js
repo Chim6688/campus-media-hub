@@ -1,4 +1,4 @@
-// 发布前检查纯函数（V1.0 Phase 6，§20）：把分散的完成度信号汇总为八项清单
+// 发布前检查纯函数（V1.0 Phase 6，§20）：把分散的完成度信号汇总为九项清单
 // state：coverOk（配图工作台上报有封面）、boundCount（绑定正文图数）、report（/api/check 结果，null=未跑）
 // 返回 [{ name, ok, hint }]；ok 全 true 才可提交审核（体验层；后端 rules-engine 为真门禁）
 
@@ -8,7 +8,7 @@ export function buildPrecheck(task, state) {
   const summary = (task.summary || '').trim();
   const hasMaterial = !!(task.material?.name || (task.material?.highlights || []).length);
   const imgMarks = (content.match(/\[配图[^\]]*\]/g) || []).length;
-  const { coverOk, boundCount, report } = state;
+  const { coverOk, boundCount, visualOk, report } = state;
 
   return [
     {
@@ -40,6 +40,11 @@ export function buildPrecheck(task, state) {
       name: '正文配图',
       ok: imgMarks === 0 || boundCount >= imgMarks,
       hint: imgMarks === 0 ? '（无占位，可去第③步补配图计划）' : `占位 ${imgMarks} 处，已绑定 ${boundCount} 张，去第③步配图补齐`,
+    },
+    {
+      name: '视觉图',
+      ok: !!visualOk,
+      hint: '去第④步视觉设计生成封面/章节卡视觉图（可选增强，不影响提交）',
     },
     {
       name: '排版',

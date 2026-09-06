@@ -28,6 +28,18 @@ test('素材齐+成稿达标+配图说明：视觉为当前步（writing）', ()
   assert.equal(s[3].done, false); // writing 态视觉未完成
 });
 
+test('视觉完成判定（Phase 7 升级）：visualOk=true 或 reviewing/published 即完成', () => {
+  // 第三参 visualOk=true → writing 态视觉也完成
+  const a = computeSteps({ status: 'writing', material: { name: 'y' }, content: 'c'.repeat(300), title: '足够长的标题八个字以上' }, 1, true);
+  assert.equal(a[3].done, true);
+  // visualOk=false 但 reviewing → 完成（送审即认可，兼容审核中回看）
+  const b = computeSteps({ status: 'reviewing', material: { name: 'y' }, content: 'c'.repeat(300), title: '足够长的标题八个字以上' }, 0, false);
+  assert.equal(b[3].done, true);
+  // 缺省第三参 = false（向后兼容）
+  const c = computeSteps({ status: 'writing', material: { name: 'y' }, content: 'c'.repeat(300), title: '足够长的标题八个字以上' }, 1);
+  assert.equal(c[3].done, false);
+});
+
 test('配图完成判定：正文含 [配图：] 占位也算完成', () => {
   const s = computeSteps({
     status: 'writing',

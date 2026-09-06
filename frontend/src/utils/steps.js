@@ -7,16 +7,17 @@ const hasImages = (t, boundCount) =>
   boundCount > 0 || !!(t.material?.photoNotes || '').trim() || /\[配图[：:]/.test(t.content || '');
 
 // contentImagesBound：当前任务已绑定槽位的正文图片数（由配图工作台维护，缺省 0 向后兼容）
-export function computeSteps(task, contentImagesBound = 0) {
+// visualOk（Phase 7 升级）：任务视觉图已生成落库（source='ai' 的图片存在，由详情页刷新链路上报）
+export function computeSteps(task, contentImagesBound = 0, visualOk = false) {
   // 排版/检查完成 = 已推进到审核或发布（送审前必须认可排版、通过规范检查门禁）
   const layoutOk = task.status === 'reviewing' || task.status === 'published';
-  // 视觉完成 = 同排版口径（Phase 3 前无独立视觉数据，送审即视为视觉已认可）
-  const visualOk = layoutOk;
+  // 视觉完成 = 有视觉图数据，或已送审（送审即视为认可，兼容审核中回看）
+  const visualDone = visualOk || layoutOk;
   const steps = [
     { key: 'material', label: '素材', done: hasMaterial(task.material) },
     { key: 'draft', label: '写稿', done: hasDraft(task) },
     { key: 'images', label: '配图', done: hasImages(task, contentImagesBound) },
-    { key: 'visual', label: '视觉', done: visualOk },
+    { key: 'visual', label: '视觉', done: visualDone },
     { key: 'layout', label: '排版', done: layoutOk },
     { key: 'check', label: '检查', done: layoutOk },
     { key: 'review', label: '审核', done: task.status === 'published' },
