@@ -10,9 +10,10 @@ import { buildCoverData, buildSectionData, firstContentImage } from '../../utils
 import VisualCardPreview from './VisualCardPreview.vue';
 import VisualTemplateSelector from './VisualTemplateSelector.vue';
 import VisualImagePicker from './VisualImagePicker.vue';
+import VisualSuggest from './VisualSuggest.vue'; // AI 视觉建议（Phase 6）
 
 const props = defineProps({
-  taskId: String, title: String, summary: String, material: Object,
+  taskId: String, title: String, summary: String, content: String, material: Object,
   themeId: String, themeOverrides: Object, boundImages: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['images-change']);
@@ -55,6 +56,18 @@ function onPick(img) {
   if (picker.target === 'cover') coverData.imageUrl = img.url;
   else cardData.imageUrl = img.url;
   picker.show = false;
+}
+
+// —— AI 建议应用（Phase 6）：预填编辑态（小编确认后手动点生成，AI 不代决策）——
+function onApplyCover({ subtitle, tags }) {
+  if (subtitle) coverData.subtitle = subtitle;
+  if (tags.length) coverData.tags = tags;
+}
+function onApplyCard(c) {
+  cardData.partNum = c.partNum;
+  cardData.title = c.title;
+  if (c.subtitle) cardData.subtitle = c.subtitle;
+  cardSlot.value = c.slot;
 }
 
 // —— 生成并上传 ——
@@ -114,6 +127,9 @@ async function generateSectionCard() {
   <div class="visual-panel">
     <h3>视觉设计</h3>
     <VisualTemplateSelector v-model="stylePreset" />
+    <!-- AI 视觉建议（Phase 6）：分析文章 → 一键预填封面/章节卡文案 -->
+    <VisualSuggest :title="title" :summary="summary" :content="content" :material="material"
+      @apply-cover="onApplyCover" @apply-card="onApplyCard" />
     <p v-if="loading" class="hint">图片加载中…</p>
     <p v-if="error" class="export-error">{{ error }}</p>
 
