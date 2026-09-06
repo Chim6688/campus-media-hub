@@ -364,12 +364,15 @@ async function execRewrite(instruction) {
 // coverOk：是否有封面（Phase 6 发布前检查）
 const boundImages = ref([]);
 const coverOk = ref(false);
-const steps = computed(() => computeSteps(props.task, boundImages.value.length));
+// 视觉图是否已生成（Phase 7：source='ai' 的图片存在，步骤条与发布检查共用）
+const visualOk = ref(false);
+const steps = computed(() => computeSteps(props.task, boundImages.value.length, visualOk.value));
 const activeStep = ref(steps.value.find((s) => s.active)?.key || 'material');
 // 任务切换时落到计算出的当前步（纯展示切换，不触发保存链路）；绑定图清零待工作台重拉后回填
 watch(() => props.task.id, () => {
   boundImages.value = [];
   coverOk.value = false;
+  visualOk.value = false;
   activeStep.value = steps.value.find((s) => s.active)?.key || 'material';
 });
 
@@ -382,8 +385,18 @@ async function onVisualImagesChange() {
     boundImages.value = imgs.filter((i) => i.type === 'content' && i.position > 0)
       .sort((a, b) => a.position - b.position);
     coverOk.value = imgs.some((i) => i.type === 'cover');
+    visualOk.value = imgs.some((i) => i.source === 'ai');
   } catch { /* 静默失败：视觉面板已本地刷新，下次进入步骤自然同步 */ }
 }
+
+// 首次进入/切换任务同步视觉图状态（Phase 7）：与 onVisualImagesChange 同源逻辑
+// immediate 立即回调覆盖首次挂载；切换任务时先由上方重置块清零，再由此异步回填
+watch(() => props.task.id, async () => {
+  try {
+    const data = await listImages(props.task.id);
+    visualOk.value = (data.images || []).some((i) => i.source === 'ai');
+  } catch { /* 拉取失败静默：视觉面板打开时会自行刷新 */ }
+}, { immediate: true });
 
 // 固定步序：上一步/下一步按此导航（纯 UI 引导，不做任何校验拦截）；Phase 2 起含视觉步
 const STEP_ORDER = ['material', 'draft', 'images', 'visual', 'layout', 'check', 'review'];
@@ -489,7 +502,7 @@ const report = ref(null);
 const precheckItems = computed(() =>
   buildPrecheck(
     { title: title.value, summary: summary.value, content: content.value, material: materialPayload() },
-    { coverOk: coverOk.value, boundCount: boundImages.value.length, report: report.value },
+    { coverOk: coverOk.value, boundCount: boundImages.value.length, visualOk: visualOk.value, report: report.value },
   ),
 );
 const precheckReady = computed(() => precheckItems.value.every((i) => i.ok));
