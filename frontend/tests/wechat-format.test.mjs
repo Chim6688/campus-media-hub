@@ -139,3 +139,37 @@ test('Phase4：position 稀疏时第 N 个占位查 position=N（解绑槽1绑�
   assert.ok(out.includes('未绑定'), '槽1缺图提示');
   assert.ok(out.includes('<img src="https://x.supabase.co/only2.jpg"'), '槽2渲染真实图');
 });
+
+// ===== StylePreset 变体（V1.0 Phase 2）：journal 零回归 + bold/soft 结构差异 =====
+const OPTS = { title: '测试标题', eyebrow: '活动报道' };
+
+test('stylePreset：未指定 = journal 显式指定，输出逐字节一致（零回归红线）', () => {
+  const a = markdownToWechatHTML(SAMPLE, 'greenPink', OPTS);
+  const b = markdownToWechatHTML(SAMPLE, 'greenPink', { ...OPTS, stylePreset: 'journal' });
+  const c = markdownToWechatHTML(SAMPLE, 'greenPink', { ...OPTS, stylePreset: '不存在的' });
+  assert.equal(a, b, '显式 journal 必须与默认一致');
+  assert.equal(a, c, '非法值必须回退 journal');
+});
+
+test('stylePreset：bold 输出含实底反白标题卡与色块小节标题', () => {
+  const b = markdownToWechatHTML(SAMPLE, 'greenPink', { ...OPTS, stylePreset: 'bold' });
+  const j = markdownToWechatHTML(SAMPLE, 'greenPink', OPTS);
+  assert.notEqual(b, j, 'bold 必须与 journal 不同');
+  // bold 标题卡：accentA 实底 + 白色标题（journal 标题色是 #1a1a1a）
+  assert.ok(b.includes('background:#FD98C9'), 'bold 标题卡 accentA 实底');
+  assert.ok(b.includes('font-weight:bold;color:#ffffff;line-height:1.6'), 'bold 标题白字');
+});
+
+test('stylePreset：soft 输出含大圆角奶油卡与浅描边标题卡', () => {
+  const s = markdownToWechatHTML(SAMPLE, 'greenPink', { ...OPTS, stylePreset: 'soft' });
+  const j = markdownToWechatHTML(SAMPLE, 'greenPink', OPTS);
+  assert.notEqual(s, j, 'soft 必须与 journal 不同');
+  // soft 标题卡：cream 底 + accentA 细描边 + 大圆角（radius*2=20px）
+  assert.ok(s.includes('background:#F3EFE6;border:1.5px solid #FD98C9;border-radius:20px'), 'soft 标题卡奶油底细描边');
+});
+
+test('stylePreset：bold/soft 互不相同', () => {
+  const b = markdownToWechatHTML(SAMPLE, 'greenPink', { ...OPTS, stylePreset: 'bold' });
+  const s = markdownToWechatHTML(SAMPLE, 'greenPink', { ...OPTS, stylePreset: 'soft' });
+  assert.notEqual(b, s);
+});

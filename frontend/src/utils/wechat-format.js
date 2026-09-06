@@ -2,6 +2,7 @@
 // 纯函数、不调 AI：确定性转换，全部内联样式（公众号会剥离 class）
 import { marked } from 'marked';
 import { THEMES, DEFAULT_THEME, resolveTheme } from './themes.js';
+import { normalizeStylePreset } from './style-presets.js'; // StylePreset 白名单（Phase 2）
 
 // ===== 基础工具 =====
 
@@ -40,7 +41,10 @@ const isFooterPara = (t) => /(编辑|责编|校对|审核)\s*[｜|]/.test(t.spli
 // ===== 模板组件（色值全部取自 theme，换皮肤=换theme对象） =====
 
 // 双层错位描边标题卡（demo L13-22）
-function titleCard(theme, title, eyebrow) {
+function titleCard(theme, title, eyebrow, preset) {
+  // Phase 2 风格分派：bold/soft 走变体，journal/缺省走现版（零回归）
+  if (preset === 'bold') return titleCardBold(theme, title, eyebrow);
+  if (preset === 'soft') return titleCardSoft(theme, title, eyebrow);
   const t = inline(title, theme);
   const brow = eyebrow
     ? `<span style="display:inline-block;border:1px solid ${theme.ink};border-radius:20px;padding:2px 16px;font-size:13px;color:${theme.ink};">${esc(eyebrow)}</span>`
@@ -54,15 +58,61 @@ function titleCard(theme, title, eyebrow) {
 </section>`;
 }
 
+// bold 标题卡：accentA 实底反白，无错位层（文档流，微信编辑器兼容）
+function titleCardBold(theme, title, eyebrow) {
+  const t = inline(title, theme);
+  const brow = eyebrow
+    ? `<span style="display:inline-block;border:1px solid #ffffff;border-radius:20px;padding:2px 16px;font-size:13px;color:#ffffff;">${esc(eyebrow)}</span>`
+    : '';
+  return `<section style="margin:30px 8px 40px;background:${theme.accentA};border-radius:${theme.titleRadius}px;padding:28px 20px 24px;">
+<section style="text-align:center;">${brow}
+<p style="font-size:${theme.titleFontSize}px;font-weight:bold;color:#ffffff;line-height:1.6;margin:14px 0 0;">${t}</p>
+</section>
+</section>`;
+}
+
+// soft 标题卡：奶油底 + accentA 细描边 + 大圆角
+function titleCardSoft(theme, title, eyebrow) {
+  const t = inline(title, theme);
+  const brow = eyebrow
+    ? `<span style="display:inline-block;background:#ffffff;border-radius:20px;padding:2px 16px;font-size:13px;color:${theme.creamText};">${esc(eyebrow)}</span>`
+    : '';
+  return `<section style="margin:30px 8px 40px;background:${theme.cream};border:${theme.thinBorder}px solid ${theme.accentA};border-radius:${theme.radius * 2}px;padding:28px 20px 24px;">
+<section style="text-align:center;">${brow}
+<p style="font-size:${theme.titleFontSize}px;font-weight:bold;color:${theme.ink};line-height:1.6;margin:14px 0 0;">${t}</p>
+</section>
+</section>`;
+}
+
 // 黑细描边引言卡（demo L30-33，用于开头金句）
-function introCard(theme, text) {
+function introCard(theme, text, preset) {
+  // Phase 2 风格分派：bold/soft 走变体，journal/缺省走现版（零回归）
+  if (preset === 'bold') return introCardBold(theme, text);
+  if (preset === 'soft') return introCardSoft(theme, text);
   return `<section style="background:${theme.cardBg};border:${theme.thinBorder}px solid ${theme.ink};border-radius:${theme.radius}px;padding:18px 20px;margin:0 8px 36px;">
 <p style="font-size:${theme.bodyFontSize}px;color:${theme.ink};line-height:${theme.bodyLineHeight};margin:0;">${inline(text, theme)}</p>
 </section>`;
 }
 
+// bold 引言卡：accentA 左粗条 + 直角右圆角
+function introCardBold(theme, text) {
+  return `<section style="background:${theme.cardBg};border-left:6px solid ${theme.accentA};border-radius:0 ${theme.radius}px ${theme.radius}px 0;padding:18px 20px;margin:0 8px 36px;">
+<p style="font-size:${theme.bodyFontSize}px;color:${theme.ink};line-height:${theme.bodyLineHeight};margin:0;">${inline(text, theme)}</p>
+</section>`;
+}
+
+// soft 引言卡：奶油底大圆角
+function introCardSoft(theme, text) {
+  return `<section style="background:${theme.cream};border-radius:${theme.radius * 2}px;padding:18px 20px;margin:0 8px 36px;">
+<p style="font-size:${theme.bodyFontSize}px;color:${theme.ink};line-height:${theme.bodyLineHeight};margin:0;">${inline(text, theme)}</p>
+</section>`;
+}
+
 // 小节标题：半圆序号 + 黑虚线胶囊 + 绿菱形（demo L36-40）
-function sectionTitle(theme, num, text) {
+function sectionTitle(theme, num, text, preset) {
+  // Phase 2 风格分派：bold/soft 走变体，journal/缺省走现版（零回归）
+  if (preset === 'bold') return sectionTitleBold(theme, num, text);
+  if (preset === 'soft') return sectionTitleSoft(theme, num, text);
   return `<section style="text-align:center;margin:0 0 30px;">
 <span style="display:inline-block;background:${theme.accentA};color:#fff;font-size:15px;font-weight:bold;padding:6px 10px;border-radius:6px 20px 20px 6px;vertical-align:middle;">${pad2(num)}</span>
 <span style="display:inline-block;background:${theme.cardBg};border:${theme.borderWidth}px dashed ${theme.ink};border-radius:0 24px 24px 0;padding:6px 22px 6px 16px;font-size:${theme.sectionFontSize}px;font-weight:bold;color:#1a1a1a;vertical-align:middle;margin-left:-4px;">${inline(text, theme)}</span>
@@ -70,11 +120,45 @@ function sectionTitle(theme, num, text) {
 </section>`;
 }
 
+// bold 小节标题：ink 实底序号块 + accentA 实底标题块（双实底几何拼接）
+function sectionTitleBold(theme, num, text) {
+  return `<section style="text-align:center;margin:0 0 30px;">
+<span style="display:inline-block;background:${theme.ink};color:#ffffff;font-size:15px;font-weight:bold;padding:6px 12px;vertical-align:middle;">${pad2(num)}</span>
+<span style="display:inline-block;background:${theme.accentA};padding:6px 22px;font-size:${theme.sectionFontSize}px;font-weight:bold;color:#ffffff;vertical-align:middle;">${inline(text, theme)}</span>
+</section>`;
+}
+
+// soft 小节标题：奶油胶囊一体式（序号 · 标题）
+function sectionTitleSoft(theme, num, text) {
+  return `<section style="text-align:center;margin:0 0 30px;">
+<span style="display:inline-block;background:${theme.cream};border:${theme.thinBorder}px solid ${theme.accentB};border-radius:24px;padding:6px 22px;font-size:${theme.sectionFontSize}px;font-weight:bold;color:${theme.ink};vertical-align:middle;">${pad2(num)} · ${inline(text, theme)}</span>
+</section>`;
+}
+
 // 子标题：绿圆片序号 + 白底绿顶线（demo L64-68，对应 ###）
-function subHeading(theme, num, text) {
+function subHeading(theme, num, text, preset) {
+  // Phase 2 风格分派：bold/soft 走变体，journal/缺省走现版（零回归）
+  if (preset === 'bold') return subHeadingBold(theme, num, text);
+  if (preset === 'soft') return subHeadingSoft(theme, num, text);
   return `<section style="text-align:center;margin:0 8px 14px;">
 <span style="display:inline-block;background:${theme.accentB};color:#fff;font-size:13px;font-weight:bold;width:26px;height:26px;line-height:26px;border-radius:50%;vertical-align:middle;">${num}</span>
 <span style="display:inline-block;background:${theme.cardBg};border-top:${theme.borderWidth}px solid ${theme.accentB};border-radius:0 0 10px 10px;padding:6px 18px;font-size:${theme.bodyFontSize}px;font-weight:bold;color:#1a1a1a;vertical-align:middle;">${inline(text, theme)}</span>
+</section>`;
+}
+
+// bold 子标题：accentA 实底方块序号 + 左粗线标题
+function subHeadingBold(theme, num, text) {
+  return `<section style="text-align:center;margin:0 8px 14px;">
+<span style="display:inline-block;background:${theme.accentA};color:#ffffff;font-size:13px;font-weight:bold;width:26px;height:26px;line-height:26px;vertical-align:middle;">${num}</span>
+<span style="display:inline-block;background:${theme.cardBg};border-left:4px solid ${theme.accentA};padding:6px 18px;font-size:${theme.bodyFontSize}px;font-weight:bold;color:#1a1a1a;vertical-align:middle;">${inline(text, theme)}</span>
+</section>`;
+}
+
+// soft 子标题：奶油圆片序号 + 无底标题
+function subHeadingSoft(theme, num, text) {
+  return `<section style="text-align:center;margin:0 8px 14px;">
+<span style="display:inline-block;background:${theme.cream};color:${theme.creamText};font-size:13px;font-weight:bold;width:26px;height:26px;line-height:26px;border-radius:50%;vertical-align:middle;">${num}</span>
+<span style="display:inline-block;padding:6px 18px;font-size:${theme.bodyFontSize}px;font-weight:bold;color:${theme.ink};vertical-align:middle;">${inline(text, theme)}</span>
 </section>`;
 }
 
@@ -86,9 +170,26 @@ function bodyCard(theme, text) {
 }
 
 // 绿胶囊标签（demo L48-50，用于"核心信息"节标题）
-function infoBadge(theme, text) {
+function infoBadge(theme, text, preset) {
+  // Phase 2 风格分派：bold/soft 走变体，journal/缺省走现版（零回归）
+  if (preset === 'bold') return infoBadgeBold(theme, text);
+  if (preset === 'soft') return infoBadgeSoft(theme, text);
   return `<section style="text-align:center;margin:0 8px 14px;">
 <span style="display:inline-block;background:${theme.accentB};color:#fff;font-size:15px;font-weight:bold;padding:5px 20px;border-radius:14px;box-shadow:0 0 0 3px ${theme.pageBg}, 0 0 0 5px ${theme.accentB};">${inline(text, theme)}</span>
+</section>`;
+}
+
+// bold 信息标签：ink 实底直角
+function infoBadgeBold(theme, text) {
+  return `<section style="text-align:center;margin:0 8px 14px;">
+<span style="display:inline-block;background:${theme.ink};color:#ffffff;font-size:15px;font-weight:bold;padding:5px 24px;">${inline(text, theme)}</span>
+</section>`;
+}
+
+// soft 信息标签：奶油底细描边圆角
+function infoBadgeSoft(theme, text) {
+  return `<section style="text-align:center;margin:0 8px 14px;">
+<span style="display:inline-block;background:${theme.cream};border:1px solid ${theme.creamBorder};color:${theme.ink};font-size:15px;font-weight:bold;padding:5px 24px;border-radius:20px;">${inline(text, theme)}</span>
 </section>`;
 }
 
@@ -100,9 +201,26 @@ function infoCard(theme, text) {
 }
 
 // 粉描边金句条（demo L71-73，正文中段引用）
-function quoteCard(theme, text) {
+function quoteCard(theme, text, preset) {
+  // Phase 2 风格分派：bold/soft 走变体，journal/缺省走现版（零回归）
+  if (preset === 'bold') return quoteCardBold(theme, text);
+  if (preset === 'soft') return quoteCardSoft(theme, text);
   return `<section style="background:${theme.cardBg};border:${theme.thinBorder}px solid ${theme.accentA};border-radius:${theme.titleRadius}px;padding:14px 20px;margin:0 8px ${theme.sectionGap}px;text-align:center;">
 <span style="font-size:${theme.bodyFontSize}px;color:${theme.ink};line-height:1.9;">${inline(text, theme)}</span>
+</section>`;
+}
+
+// bold 金句条：accentA 实底白字加粗
+function quoteCardBold(theme, text) {
+  return `<section style="background:${theme.accentA};border-radius:${theme.titleRadius}px;padding:14px 20px;margin:0 8px ${theme.sectionGap}px;text-align:center;">
+<span style="font-size:${theme.bodyFontSize}px;color:#ffffff;line-height:1.9;font-weight:bold;">${inline(text, theme)}</span>
+</section>`;
+}
+
+// soft 金句条：奶油底大圆角浅字
+function quoteCardSoft(theme, text) {
+  return `<section style="background:${theme.cream};border-radius:${theme.radius * 2}px;padding:14px 20px;margin:0 8px ${theme.sectionGap}px;text-align:center;">
+<span style="font-size:${theme.bodyFontSize}px;color:${theme.creamText};line-height:1.9;">${inline(text, theme)}</span>
 </section>`;
 }
 
@@ -159,6 +277,7 @@ function refCard(theme, refs) {
 // （{position,url,caption}[]，Phase 3 槽位模型：第 N 个整段 [配图：] 占位 = 槽位 N）
 export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {}) {
   const theme = resolveTheme(themeId, opts.overrides); // 预设 + 用户覆盖合并后的完整令牌
+  const preset = normalizeStylePreset(opts.stylePreset); // Phase 2：结构风格（journal=现版零回归）
   const tokens = marked.lexer(markdown || '');
   const refs = []; // 批3：全文链接收集（同 URL 复用序号）
   // Phase 4：position → 绑定图片映射（稀疏绑定场景按 position 精确查）
@@ -178,19 +297,19 @@ export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {
           hasH1 = true;
           // 支持 "# 眉标｜标题" 拆分
           const m = text.match(/^(.+?)[｜|]\s*(.+)$/);
-          parts.push(m ? titleCard(theme, m[2], m[1]) : titleCard(theme, text, opts.eyebrow));
+          parts.push(m ? titleCard(theme, m[2], m[1], preset) : titleCard(theme, text, opts.eyebrow, preset));
         } else if (tok.depth === 2) {
           inInfoSection = /核心信息|重要信息|活动信息/.test(text);
           if (inInfoSection) {
-            parts.push(infoBadge(theme, text));
+            parts.push(infoBadge(theme, text, preset));
           } else {
             sectionNum += 1;
-            parts.push(sectionTitle(theme, sectionNum, text));
+            parts.push(sectionTitle(theme, sectionNum, text, preset));
           }
         } else {
           inInfoSection = false;
           sectionNum += 1;
-          parts.push(subHeading(theme, sectionNum, text));
+          parts.push(subHeading(theme, sectionNum, text, preset));
         }
         break;
       }
@@ -213,9 +332,9 @@ export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {
         // 第一个引用 = 开头引言卡；后续引用 = 金句条
         if (!introDone) {
           introDone = true;
-          parts.push(introCard(theme, extractLinks(tok.text || '', refs)));
+          parts.push(introCard(theme, extractLinks(tok.text || '', refs), preset));
         } else {
-          parts.push(quoteCard(theme, extractLinks(tok.text || '', refs)));
+          parts.push(quoteCard(theme, extractLinks(tok.text || '', refs), preset));
         }
         break;
       }
@@ -241,7 +360,7 @@ export function markdownToWechatHTML(markdown, themeId = DEFAULT_THEME, opts = {
 
   // 文首标题卡：内容无 # 标题且外部传了标题时，用任务标题渲染
   if (!hasH1 && opts.title) {
-    parts.unshift(titleCard(theme, opts.title, opts.eyebrow));
+    parts.unshift(titleCard(theme, opts.title, opts.eyebrow, preset));
   }
 
   // 批3：有链接时文末追加参考链接区（放在最末，落款卡之后，与 wechat-format 先例一致）
