@@ -373,6 +373,18 @@ watch(() => props.task.id, () => {
   activeStep.value = steps.value.find((s) => s.active)?.key || 'material';
 });
 
+// 视觉面板图片变更（Phase 3+4）：封面生成/章节卡绑定后，重拉图片同步步骤条与封面状态
+// 复用 ImageWorkspace 的刷新语义：封面状态影响发布前检查，绑定数影响步骤条
+async function onVisualImagesChange() {
+  try {
+    const data = await listImages(props.task.id);
+    const imgs = data.images;
+    boundImages.value = imgs.filter((i) => i.type === 'content' && i.position > 0)
+      .sort((a, b) => a.position - b.position);
+    coverOk.value = imgs.some((i) => i.type === 'cover');
+  } catch { /* 静默失败：视觉面板已本地刷新，下次进入步骤自然同步 */ }
+}
+
 // 固定步序：上一步/下一步按此导航（纯 UI 引导，不做任何校验拦截）
 const STEP_ORDER = ['material', 'draft', 'images', 'layout', 'check', 'review'];
 const prevStep = computed(() => STEP_ORDER[STEP_ORDER.indexOf(activeStep.value) - 1] || null);
@@ -799,9 +811,10 @@ async function downloadAllImages() {
 
         <!-- ④ 视觉设计（Phase 2 独立成步）：Mock 面板，Phase 3 接真实数据 -->
         <template v-else-if="activeStep === 'visual'">
-          <VisualPanel :task-id="task.id" :title="title" :theme-id="themeId"
-            :theme-overrides="{ ...themeOverrides }" v-model:style-preset="stylePreset" />
-          <p class="step-hint">生成封面与章节卡视觉图（当前为 Mock 数据，Phase 3 接入文章真实数据）</p>
+          <VisualPanel :task-id="task.id" :title="title" :summary="summary" :material="materialPayload()"
+            :theme-id="themeId" :theme-overrides="{ ...themeOverrides }" v-model:style-preset="stylePreset"
+            :bound-images="boundImages" @images-change="onVisualImagesChange" />
+          <p class="step-hint">生成视觉图自动进入文章：封面直接生效，章节卡绑定正文图位</p>
         </template>
 
         <!-- ④ 排版：模板/画廊/AI配色/调参数，右侧预览实时刷新 -->

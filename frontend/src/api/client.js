@@ -58,13 +58,14 @@ async function imageRequest(path, options = {}) {
 }
 
 // 上传图片（multipart）：file + 元数据；成功返回 { image }
-export function uploadImage(file, { taskId, type = 'content', position = 0, caption = '' }) {
+export function uploadImage(file, { taskId, type = 'content', position = 0, caption = '', source = '' }) {
   const fd = new FormData();
   fd.append('file', file);
   fd.append('task_id', taskId);
   fd.append('type', type);
   fd.append('position', String(position));
   if (caption) fd.append('caption', caption);
+  if (source) fd.append('source', source); // Phase 3+4：视觉生成图标记来源 ai（后端白名单 ai/upload）
   return imageRequest('/api/images', { method: 'POST', body: fd });
 }
 
