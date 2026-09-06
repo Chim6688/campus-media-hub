@@ -1,7 +1,7 @@
 // 视觉数据装配器（V1.0 Phase 3+4）：任务数据 → 视觉卡 data 契约
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCoverData, buildSectionData, firstContentImage } from '../src/utils/visual-data.js';
+import { buildCoverData, buildSectionData, firstContentImage, normalizeVisualSuggestions } from '../src/utils/visual-data.js';
 
 const TASK = {
   title: '山海电白青春突击队',
@@ -60,4 +60,67 @@ test('firstContentImage：取第一张 position=0 的正文图；无则 null（�
   assert.equal(firstContentImage([{ type: 'content', position: 3 }]), null);
   assert.equal(firstContentImage([]), null);
   assert.equal(firstContentImage(null), null);
+});
+
+// ===== AI 视觉建议清洗（V1.0 Phase 6）：AI 输出不可信，白名单+截断是防线 =====
+const GOOD_SUGGEST = {
+  coverSubtitle: '山海青春 挺膺担当',
+  coverTags: ['三下乡', '文旅调研', '青春担当'],
+  sectionCards: [
+    { partNum: 1, title: '旧址参观学党史', subtitle: '追溯红色足迹', slot: 1 },
+    { partNum: 2, title: '田间调研话振兴', subtitle: '把论文写在大地', slot: 2 },
+  ],
+};
+
+test('normalizeVisualSuggestions：合法建议原样通过（排序）', () => {
+  const r = normalizeVisualSuggestions(GOOD_SUGGEST);
+  assert.equal(r.coverSubtitle, '山海青春 挺膺担当');
+  assert.deepEqual(r.coverTags, ['三下乡', '文旅调研', '青春担当']);
+  assert.equal(r.sectionCards.length, 2);
+  assert.equal(r.sectionCards[0].partNum, 1);
+  assert.equal(r.sectionCards[1].slot, 2);
+});
+
+test('normalizeVisualSuggestions：超限截断（tags>3、tag>8字、subtitle>16字）', () => {
+  const r = normalizeVisualSuggestions({
+    coverSubtitle: 'a'.repeat(30),
+    coverTags: ['一二三四五六七八九', 'ok', '第三个', '第四个'],
+    sectionCards: [{ partNum: 1, title: '标题', subtitle: 'b'.repeat(20), slot: 1 }],
+  });
+  assert.equal(r.coverTags.length, 3, 'tags 最多 3 个');
+  assert.equal(r.coverTags[0].length, 8, '单个 tag 最多 8 字');
+  assert.equal(r.coverSubtitle.length, 30, 'coverSubtitle 上限 30 字');
+  assert.ok(r.sectionCards[0].subtitle.length <= 16, '章节卡 subtitle ≤16 字');
+});
+
+test('normalizeVisualSuggestions：脏数据容错（不抛异常、字段兜底）', () => {
+  const r = normalizeVisualSuggestions({
+    sectionCards: [
+      { title: '有效卡' },
+      { title: '', subtitle: '无标题卡应丢弃' },
+      { partNum: 'x', title: '二', slot: -5 },
+      { partNum: 9, title: '三' },
+      { partNum: 10, title: '四' },
+    ],
+  });
+  assert.equal(r.sectionCards.length, 3, '最多 3 张且丢弃无标题卡');
+  assert.equal(r.sectionCards[0].partNum, 1, 'partNum 缺省补序号');
+  assert.equal(r.sectionCards[0].slot, 1, 'slot 非法回 1');
+  assert.ok(r.sectionCards[0].title === '有效卡');
+});
+
+test('normalizeVisualSuggestions：非对象/null/数组输入返回全空结构', () => {
+  for (const bad of [null, undefined, 'x', [], 123]) {
+    const r = normalizeVisualSuggestions(bad);
+    assert.equal(r.coverSubtitle, '');
+    assert.deepEqual(r.coverTags, []);
+    assert.deepEqual(r.sectionCards, []);
+  }
+});
+
+test('normalizeVisualSuggestions：coverTags 非数组/含非字符串容错', () => {
+  const r = normalizeVisualSuggestions({ coverTags: '不是数组', sectionCards: [{ title: 't' }] });
+  assert.deepEqual(r.coverTags, []);
+  const r2 = normalizeVisualSuggestions({ coverTags: [1, '有效', null, ''] });
+  assert.deepEqual(r2.coverTags, ['有效'], '只留非空字符串项');
 });
