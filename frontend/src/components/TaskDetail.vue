@@ -10,7 +10,7 @@ import ThemeGallery from './ThemeGallery.vue'; // 模板画廊弹窗（批1）
 import ImageWorkspace from './ImageWorkspace.vue'; // 配图工作台（V1.0 Phase 3）
 import VisualPanel from './visual/VisualPanel.vue'; // 视觉设计面板（V1.0 Phase 1）
 import VisualTemplateSelector from './visual/VisualTemplateSelector.vue'; // 风格三选一（Phase 2）
-import { normalizeSkin } from '../utils/skin.js'; // AI 皮肤输出清洗（B 批）
+import VisionSkinModal from './VisionSkinModal.vue'; // AI 配色弹窗（描述+识图双模式，Phase 5）
 
 const props = defineProps({ task: Object });
 const emit = defineEmits(['back', 'refresh']);
@@ -552,34 +552,16 @@ const OVERRIDES_SCHEMA = [
 const panelOpen = ref(false); // 参数面板默认收起
 const galleryOpen = ref(false); // 模板画廊弹窗开关（批1）
 
-// AI 生成皮肤弹窗（B 批）：输入风格描述 → gen_skin → 清洗 → 应用为当前任务覆盖
-const skinModal = reactive({ show: false, input: '', loading: false });
-function openSkinModal() {
-  skinModal.show = true;
-  skinModal.input = '';
-}
-// 生成并应用：AI 输出经 normalizeSkin 清洗（字段过滤+hex校验），合法键数<8 视为失败提示重试
-async function generateSkin() {
-  if (!skinModal.input.trim()) return;
-  skinModal.loading = true;
-  error.value = '';
-  try {
-    const text = await callAI('gen_skin', { text: skinModal.input.trim() });
-    const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    const skin = normalizeSkin(JSON.parse(clean));
-    if (Object.keys(skin).length < 8) {
-      error.value = 'AI 生成的配色不完整，请换个描述重试（或用「🎨 调参数」手动配色）';
-      return;
-    }
-    // 应用 = 清空旧覆盖再写入整套配色（AI 皮肤是完整方案，同切预设清覆盖语义）
-    for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
-    Object.assign(themeOverrides, skin);
-    skinModal.show = false; // 关弹窗，预览即时刷新+防抖自动保存（既有链路）
-  } catch (e) {
-    error.value = 'AI 生成失败，请重试：' + e.message;
-  } finally {
-    skinModal.loading = false;
-  }
+// AI 配色弹窗（Phase 5 抽组件）：apply 回调统一处理两种模式的结果
+const skinModal = ref(false);
+function openSkinModal() { skinModal.value = true; }
+// 应用：colors 覆盖 8 色令牌；stylePreset 非空时同步结构风格（识图模式才有）
+// 参数重命名为 preset，避免解构变量遮蔽外部 stylePreset ref 导致 .value 赋值失效
+function onSkinApply({ colors, stylePreset: preset }) {
+  for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
+  Object.assign(themeOverrides, colors);
+  if (preset) stylePreset.value = preset;
+  skinModal.value = false; // 关弹窗，预览即时刷新+防抖自动保存（既有链路）
 }
 
 watch(themeId, (v) => localStorage.setItem('themeId', v));
@@ -1036,21 +1018,8 @@ async function downloadAllImages() {
       @select="(id) => { themeId = id; galleryOpen = false; }"
       @close="galleryOpen = false" />
 
-    <!-- AI 配色弹窗：风格描述 → 整套配色应用（复用 modal-mask/modal 既有样式） -->
-    <div v-if="skinModal.show" class="modal-mask" @click.self="skinModal.show = false">
-      <div class="modal">
-        <p class="modal-title">✨ AI 生成配色</p>
-        <textarea v-model="skinModal.input" rows="3"
-          placeholder="描述想要的风格，如：蓝金科技感 / 温柔奶油风 / 圣诞红绿"></textarea>
-        <div class="modal-btns">
-          <button @click="skinModal.show = false">取消</button>
-          <button class="primary" :disabled="skinModal.loading || !skinModal.input.trim()" @click="generateSkin">
-            {{ skinModal.loading ? '生成中…' : '生成并应用' }}
-          </button>
-        </div>
-        <p class="skin-tip">生成的是整套配色（底色/强调色/文字色等 8 项）；圆角字号等细调用「🎨 调参数」</p>
-      </div>
-    </div>
+            <!-- AI 配色弹窗（Phase 5）：描述生成 + 参考图识别双模式 -->
+            <VisionSkinModal :show="skinModal" @close="skinModal = false" @apply="onSkinApply" />
   </section>
 </template>
 
