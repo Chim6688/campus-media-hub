@@ -191,4 +191,30 @@ ${p.text.slice(0, 2000)}`,
 要求：position 从 1 开始按正文顺序；description 是具体画面描述（10 字内，用于拍摄或选图，会填入配图计划）；reason 一句话说明为什么放这个位置。`,
     },
   ],
+
+  // AI 视觉卡建议（V1.0 Phase 6，§24/Phase 6）：分析文章 → 封面副标题/标签 + 章节卡文案；前端 normalizeVisualSuggestions 清洗
+  visual_suggestions: (p) => [
+    { role: 'system', content: '你是公众号视觉设计顾问，擅长从文章内容提炼适合海报呈现的短文案。' },
+    {
+      role: 'user',
+      content: `分析以下推文，为视觉模板（封面海报 + 章节卡）推荐文案。
+标题：${p.title || '（无）'}
+摘要：${p.summary || '（无）'}
+正文：${(p.content || '').slice(0, 1500)}
+素材亮点：${JSON.stringify(p.material?.highlights || []) || '（无）'}
+
+输出一个 JSON 对象，包含三部分：
+1. coverSubtitle：封面副标题建议，一句话（15 字内，比摘要更精炼有力，适合海报大字）
+2. coverTags：封面标签建议，2-3 个短词数组（各 4-6 字，如"三下乡""青春担当"）
+3. sectionCards：章节卡建议数组（1-3 张），每张含：
+   - partNum：Part 序号（正整数，从 1 开始）
+   - title：章节标题（3-10 字，概括文章一个篇章，如"旧址参观学党史"）
+   - subtitle：章节副标题（10 字内，补充意境）
+   - slot：建议绑定的正文图位（正整数，按文章段落顺序）
+
+要求：文案从正文实际内容提炼，不编造；章节卡标题彼此不重复。
+严格按 JSON 输出，不要任何其他文字，不要 markdown 代码块包裹，如：
+{"coverSubtitle":"...","coverTags":["...","..."],"sectionCards":[{"partNum":1,"title":"...","subtitle":"...","slot":1}]}`,
+    },
+  ],
 };
