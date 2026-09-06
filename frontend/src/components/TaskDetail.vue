@@ -9,6 +9,7 @@ import { buildPrecheck } from '../utils/precheck.js'; // 发布前检查纯函�
 import ThemeGallery from './ThemeGallery.vue'; // 模板画廊弹窗（批1）
 import ImageWorkspace from './ImageWorkspace.vue'; // 配图工作台（V1.0 Phase 3）
 import VisualPanel from './visual/VisualPanel.vue'; // 视觉设计面板（V1.0 Phase 1）
+import VisualTemplateSelector from './visual/VisualTemplateSelector.vue'; // 风格三选一（Phase 2）
 import { normalizeSkin } from '../utils/skin.js'; // AI 皮肤输出清洗（B 批）
 
 const props = defineProps({ task: Object });
@@ -170,6 +171,7 @@ watch(() => props.task.id, () => {
   themeId.value = props.task.layout_theme?.id || localStorage.getItem('themeId') || 'greenPink';
   for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
   Object.assign(themeOverrides, props.task.layout_theme?.overrides || {});
+  stylePreset.value = props.task.layout_theme?.stylePreset || 'journal';
   // 整改清单回填：旧任务无清单 → 空数组（不阻塞推进）
   checklist.value = Array.isArray(props.task.review_checklist) ? [...props.task.review_checklist] : [];
   if (saveTimer) clearTimeout(saveTimer);
@@ -206,7 +208,7 @@ async function save(isAuto = false) {
       title: title.value,
       summary: summary.value,
       content: content.value,
-      layout_theme: { id: themeId.value, overrides: { ...themeOverrides } }, // 排版主题随任务持久化（P2-6 起独立列，不撞推文主题）
+      layout_theme: { id: themeId.value, overrides: { ...themeOverrides }, stylePreset: stylePreset.value }, // 排版主题+结构风格随任务持久化
     };
     if (hasMaterial()) body.material = materialPayload(); // 素材随文稿一起持久化
     await request('/api/tasks', {
@@ -524,6 +526,8 @@ async function addComment() {
 const themeId = ref(props.task.layout_theme?.id || localStorage.getItem('themeId') || 'greenPink');
 // 令牌覆盖：色板 + 圆角/字号/间距滑杆（滑杆 min/max 即 clamp 范围，防破坏性布局）
 const themeOverrides = reactive({ ...(props.task.layout_theme?.overrides || {}) });
+// 结构风格（Phase 2）：任务级持久化于 layout_theme.stylePreset，缺省 journal（历史数据零迁移兼容）
+const stylePreset = ref(props.task.layout_theme?.stylePreset || 'journal');
 // 参数面板字段定义：type=color 为色板，type=range 为滑杆（值范围即 clamp）
 const OVERRIDES_SCHEMA = [
   { key: 'accentA', label: '强调色A', type: 'color' },
@@ -574,7 +578,7 @@ watch(themeId, () => {
 });
 
 // 主题快照进自动保存：皮肤与覆盖变化都触发防抖保存（switching 时由 scheduleAutoSave 内部跳过）
-const themeSnapshot = computed(() => JSON.stringify({ id: themeId.value, overrides: themeOverrides }));
+const themeSnapshot = computed(() => JSON.stringify({ id: themeId.value, overrides: themeOverrides, stylePreset: stylePreset.value }));
 watch(themeSnapshot, () => scheduleAutoSave());
 
 // 右侧实时预览：Markdown → 手账卡片风 HTML（标题卡取标题字段，眉标用任务类型；overrides 传令牌覆盖）
@@ -582,6 +586,7 @@ watch(themeSnapshot, () => scheduleAutoSave());
 const wechatHTML = computed(() =>
   markdownToWechatHTML(content.value, themeId.value, {
     title: title.value, eyebrow: props.task.type, overrides: { ...themeOverrides }, images: boundImages.value,
+    stylePreset: stylePreset.value, // Phase 2：结构风格进预览与复制（同源）
   }),
 );
 const copied = ref(false);
@@ -792,15 +797,20 @@ async function downloadAllImages() {
             @bound-change="boundImages = $event" @cover-change="coverOk = $event" />
         </template>
 
+        <!-- ④ 视觉设计（Phase 2 独立成步）：Mock 面板，Phase 3 接真实数据 -->
+        <template v-else-if="activeStep === 'visual'">
+          <VisualPanel :task-id="task.id" :title="title" :theme-id="themeId"
+            :theme-overrides="{ ...themeOverrides }" v-model:style-preset="stylePreset" />
+          <p class="step-hint">生成封面与章节卡视觉图（当前为 Mock 数据，Phase 3 接入文章真实数据）</p>
+        </template>
+
         <!-- ④ 排版：模板/画廊/AI配色/调参数，右侧预览实时刷新 -->
         <template v-else-if="activeStep === 'layout'">
-            <!-- ④.5 视觉设计（Phase 1 Mock 验证入口；Phase 2 独立成步骤） -->
-            <VisualPanel :task-id="task.id" :title="title" :theme-id="themeId"
-              :theme-overrides="{ ...themeOverrides }" />
           <div class="layout-controls">
             <select v-model="themeId" title="模板皮肤">
               <option v-for="(t, k) in THEMES" :key="k" :value="k">{{ t.label }}</option>
             </select>
+            <VisualTemplateSelector v-model="stylePreset" />
             <button class="param-toggle" @click="galleryOpen = true" title="浏览全部模板效果">
               🖼 画廊
             </button>

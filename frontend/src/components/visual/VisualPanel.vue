@@ -20,7 +20,8 @@ const coverData = reactive({
   imageUrl: '', // 空 = 纯色占位（Phase 3 接 Storage 真实图）
 });
 const cardData = reactive({ partNum: 1, title: '旧址参观学党史', subtitle: '追溯红色足迹', imageUrl: '' });
-const stylePreset = ref('journal');
+// 风格状态提升到 TaskDetail（Phase 2）：正文排版预览与视觉卡共用同一 stylePreset
+const stylePreset = defineModel('stylePreset', { type: String, default: 'journal' });
 const exporting = ref(false);
 const exportError = ref('');
 // 两个预览组件的实例引用（导出时取其 scaledRef 指向的自然尺寸节点）
