@@ -8,6 +8,7 @@ import { computeSteps } from '../utils/steps.js'; // 流程步骤条纯函数（
 import { buildPrecheck } from '../utils/precheck.js'; // 发布前检查纯函数（Phase 6，§20）
 import ThemeGallery from './ThemeGallery.vue'; // 模板画廊弹窗（批1）
 import ImageWorkspace from './ImageWorkspace.vue'; // 配图工作台（V1.0 Phase 3）
+import VisualPanel from './visual/VisualPanel.vue'; // 视觉设计面板（V1.0 Phase 1）
 import { normalizeSkin } from '../utils/skin.js'; // AI 皮肤输出清洗（B 批）
 
 const props = defineProps({ task: Object });
@@ -793,6 +794,9 @@ async function downloadAllImages() {
 
         <!-- ④ 排版：模板/画廊/AI配色/调参数，右侧预览实时刷新 -->
         <template v-else-if="activeStep === 'layout'">
+            <!-- ④.5 视觉设计（Phase 1 Mock 验证入口；Phase 2 独立成步骤） -->
+            <VisualPanel :task-id="task.id" :title="title" :theme-id="themeId"
+              :theme-overrides="{ ...themeOverrides }" />
           <div class="layout-controls">
             <select v-model="themeId" title="模板皮肤">
               <option v-for="(t, k) in THEMES" :key="k" :value="k">{{ t.label }}</option>
