@@ -385,8 +385,8 @@ async function onVisualImagesChange() {
   } catch { /* 静默失败：视觉面板已本地刷新，下次进入步骤自然同步 */ }
 }
 
-// 固定步序：上一步/下一步按此导航（纯 UI 引导，不做任何校验拦截）
-const STEP_ORDER = ['material', 'draft', 'images', 'layout', 'check', 'review'];
+// 固定步序：上一步/下一步按此导航（纯 UI 引导，不做任何校验拦截）；Phase 2 起含视觉步
+const STEP_ORDER = ['material', 'draft', 'images', 'visual', 'layout', 'check', 'review'];
 const prevStep = computed(() => STEP_ORDER[STEP_ORDER.indexOf(activeStep.value) - 1] || null);
 const nextStep = computed(() => STEP_ORDER[STEP_ORDER.indexOf(activeStep.value) + 1] || null);
 const stepLabel = (key) => steps.value.find((s) => s.key === key)?.label || key;
