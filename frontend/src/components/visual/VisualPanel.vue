@@ -2,7 +2,7 @@
 // 视觉设计面板（V1.0 Phase 3+4）：真实文章数据 + 图片库选图 + 生成 PNG 上传落库 + 自动绑定
 // 数据流：TaskDetail 传任务数据 → 装配器产出 data 契约 → 预览渲染 → 导出 Blob →
 //   uploadImage(source='ai') → 封面：删旧传新（type=cover）；章节卡：绑定指定槽位（position=N）
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { uploadImage, listImages, updateImage, deleteImage } from '../../api/client.js';
 import { exportVisualPNG } from '../../utils/visual-export.js';
 import { COVER_SIZE, SECTION_CARD_SIZE } from '../../utils/visual-templates.js';
@@ -11,6 +11,8 @@ import VisualCardPreview from './VisualCardPreview.vue';
 import VisualTemplateSelector from './VisualTemplateSelector.vue';
 import VisualImagePicker from './VisualImagePicker.vue';
 import VisualSuggest from './VisualSuggest.vue'; // AI 视觉建议（Phase 6）
+import VisualEditor from './VisualEditor.vue'; // 字段编辑（V2 Phase 1）
+import { COMPOSITIONS, COVER_COMPOSITIONS, SECTION_COMPOSITIONS } from '../../utils/compositions.js';
 
 const props = defineProps({
   taskId: String, title: String, summary: String, content: String, material: Object,
@@ -31,6 +33,12 @@ const coverData = reactive(buildCoverData({ title: props.title, summary: props.s
 const cardData = reactive(buildSectionData(1, { title: props.title, summary: props.summary }, null));
 // 章节卡目标槽位：默认 1，可改（绑定第 N 个 [配图：] 占位）
 const cardSlot = ref(1);
+// 构图状态（V2 Phase 1）：按类型分别记忆，会话态（入库持久化留 Phase 2）
+const composition = reactive({ cover: 'cover-hero', section: 'section-editorial' });
+// 当前编辑的视觉类型：两卡并存展示，编辑器/构图选择器跟随焦点卡
+const activeType = ref('cover');
+// 构图选项：按当前焦点卡类型过滤
+const compositionOptions = computed(() => (activeType.value === 'cover' ? COVER_COMPOSITIONS : SECTION_COMPOSITIONS));
 
 async function refreshImages() {
   loading.value = true;
@@ -133,10 +141,16 @@ async function generateSectionCard() {
     <p v-if="loading" class="hint">图片加载中…</p>
     <p v-if="error" class="export-error">{{ error }}</p>
 
-    <div class="preview-col">
+    <!-- 字段编辑（V2 Phase 1）：焦点卡的字段直接改，预览实时刷新 -->
+    <VisualEditor :cover-data="coverData" :card-data="cardData" :active-type="activeType" />
+
+    <div class="preview-col" @click="activeType = 'cover'">
       <p class="card-label">封面 Cover Poster（生成后自动设为任务封面）</p>
+      <select v-if="activeType === 'cover'" class="comp-select" v-model="composition.cover">
+        <option v-for="c in compositionOptions" :key="c" :value="c">{{ COMPOSITIONS[c].label }}</option>
+      </select>
       <VisualCardPreview ref="coverPreviewRef" type="cover" :data="coverData" :theme-id="themeId"
-        :theme-overrides="themeOverrides || {}" :style-preset="stylePreset" :preview-width="320" />
+        :theme-overrides="themeOverrides || {}" :style-preset="stylePreset" :preview-width="320" :composition="composition.cover" />
       <div class="btn-row">
         <button type="button" :disabled="exporting" @click="openPicker('cover')">📷 换图</button>
         <button type="button" class="primary" :disabled="exporting" @click="generateCover">
@@ -145,10 +159,13 @@ async function generateSectionCard() {
       </div>
     </div>
 
-    <div class="preview-col">
+    <div class="preview-col" @click="activeType = 'section'">
       <p class="card-label">章节卡 Section Card（生成后绑定正文图 N）</p>
+      <select v-if="activeType === 'section'" class="comp-select" v-model="composition.section">
+        <option v-for="c in compositionOptions" :key="c" :value="c">{{ COMPOSITIONS[c].label }}</option>
+      </select>
       <VisualCardPreview ref="sectionPreviewRef" type="section" :data="cardData" :theme-id="themeId"
-        :theme-overrides="themeOverrides || {}" :style-preset="stylePreset" :preview-width="200" />
+        :theme-overrides="themeOverrides || {}" :style-preset="stylePreset" :preview-width="200" :composition="composition.section" />
       <div class="btn-row">
         <label class="slot-label">绑定图
           <input type="number" v-model.number="cardSlot" min="1" max="9" />
@@ -173,6 +190,7 @@ async function generateSectionCard() {
 .visual-panel h3 { margin: 0; font-size: 15px; }
 .preview-col { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .card-label { font-size: 13px; color: #666; margin: 0; }
+.comp-select { padding: 4px 8px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 13px; align-self: flex-start; }
 .btn-row { display: flex; gap: 8px; align-items: center; }
 .slot-label { font-size: 13px; color: #666; display: flex; align-items: center; gap: 4px; }
 .slot-label input { width: 52px; padding: 4px 6px; }

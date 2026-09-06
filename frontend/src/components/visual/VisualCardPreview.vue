@@ -11,6 +11,7 @@ const props = defineProps({
   themeOverrides: { type: Object, default: () => ({}) },
   stylePreset: { type: String, default: 'journal' },
   previewWidth: { type: Number, default: 320 },
+  composition: { type: String, default: '' },
 });
 // 内层自然尺寸节点引用：父组件导出时传给 exportVisualPNG
 const scaledRef = ref(null);
@@ -19,8 +20,8 @@ defineExpose({ scaledRef });
 const size = computed(() => (props.type === 'cover' ? COVER_SIZE : SECTION_CARD_SIZE));
 const html = computed(() =>
   props.type === 'cover'
-    ? renderCoverPoster(props.data, props.themeId, { overrides: props.themeOverrides, stylePreset: props.stylePreset })
-    : renderSectionCard(props.data, props.themeId, { overrides: props.themeOverrides, stylePreset: props.stylePreset }),
+    ? renderCoverPoster(props.data, props.themeId, { overrides: props.themeOverrides, stylePreset: props.stylePreset, composition: props.composition })
+    : renderSectionCard(props.data, props.themeId, { overrides: props.themeOverrides, stylePreset: props.stylePreset, composition: props.composition }),
 );
 // 显示缩放比 = 预览区宽度 / 模板固定宽（transform 只做显示，不进导出克隆节点）
 const scale = computed(() => props.previewWidth / size.value.width);
