@@ -19,8 +19,9 @@ export function waitForImages(el) {
   return Promise.all(checks);
 }
 
-// 导出 PNG：前置检查 → 离屏克隆自然尺寸节点 → html2canvas(useCORS) → 触发下载
-export async function exportVisualPNG(el, filename, size) {
+// 导出 PNG：前置检查 → 离屏克隆自然尺寸节点 → html2canvas(useCORS) → 下载或返回 Blob
+// opts.returnBlob=true（Phase 3+4）：不触发下载，resolve Blob 供上传 article_images（同一 Blob 落库，禁止二次编解码）
+export async function exportVisualPNG(el, filename, size, opts = {}) {
   // 1) 字体就绪（中文渲染正确性的前提）
   if (document.fonts?.ready) await document.fonts.ready;
   // 2) 图片就绪（失败抛错终止）
@@ -44,7 +45,13 @@ export async function exportVisualPNG(el, filename, size) {
       height: size.height,
       backgroundColor: null,
     });
-    // 6) 触发浏览器下载
+    // 6) Blob 分支：canvas → Blob（Promise 化），直接交调用方上传
+    if (opts.returnBlob) {
+      return await new Promise((resolve, reject) =>
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG 生成失败，请重试'))), 'image/png'),
+      );
+    }
+    // 7) 默认：触发浏览器下载（零回归路径）
     const link = document.createElement('a');
     link.download = filename;
     link.href = canvas.toDataURL('image/png');
