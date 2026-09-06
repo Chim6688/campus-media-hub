@@ -11,6 +11,7 @@ import VisualCardPreview from './VisualCardPreview.vue';
 import VisualTemplateSelector from './VisualTemplateSelector.vue';
 import VisualImagePicker from './VisualImagePicker.vue';
 import VisualSuggest from './VisualSuggest.vue'; // AI 视觉建议（Phase 6）
+import VisualDesignAI from './VisualDesignAI.vue'; // AI 视觉设计（V2 Phase 2）
 import VisualEditor from './VisualEditor.vue'; // 字段编辑（V2 Phase 1）
 import { COMPOSITIONS, COVER_COMPOSITIONS, SECTION_COMPOSITIONS } from '../../utils/compositions.js';
 
@@ -18,7 +19,7 @@ const props = defineProps({
   taskId: String, title: String, summary: String, content: String, material: Object,
   themeId: String, themeOverrides: Object, boundImages: { type: Array, default: () => [] },
 });
-const emit = defineEmits(['images-change']);
+const emit = defineEmits(['images-change', 'apply-colors']);
 
 // 风格状态提升到 TaskDetail（Phase 2）：正文排版预览与视觉卡共用同一 stylePreset
 const stylePreset = defineModel('stylePreset', { type: String, default: 'journal' });
@@ -76,6 +77,14 @@ function onApplyCard(c) {
   cardData.title = c.title;
   if (c.subtitle) cardData.subtitle = c.subtitle;
   cardSlot.value = c.slot;
+}
+// AI 设计方案应用（V2 Phase 2）：构图+风格写入编辑态，8 色上抛 TaskDetail 进 themeOverrides
+// 参数重命名 comp/preset：避免与组件内 composition reactive、stylePreset defineModel 遮蔽
+function onApplyPlan({ visualType, composition: comp, stylePreset: preset, colors }) {
+  composition[visualType] = comp;
+  activeType.value = visualType; // 焦点切到应用的卡
+  stylePreset.value = preset; // defineModel 同步 TaskDetail（正文排版同源）
+  emit('apply-colors', colors);
 }
 
 // —— 生成并上传 ——
@@ -138,6 +147,8 @@ async function generateSectionCard() {
     <!-- AI 视觉建议（Phase 6）：分析文章 → 一键预填封面/章节卡文案 -->
     <VisualSuggest :title="title" :summary="summary" :content="content" :material="material"
       @apply-cover="onApplyCover" @apply-card="onApplyCard" />
+    <!-- AI 视觉设计（V2 Phase 2）：参考图 → 全维度分析 → 3 方案 -->
+    <VisualDesignAI @apply-plan="onApplyPlan" />
     <p v-if="loading" class="hint">图片加载中…</p>
     <p v-if="error" class="export-error">{{ error }}</p>
 

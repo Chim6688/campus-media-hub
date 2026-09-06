@@ -389,6 +389,12 @@ async function onVisualImagesChange() {
   } catch { /* 静默失败：视觉面板已本地刷新，下次进入步骤自然同步 */ }
 }
 
+// AI 视觉设计配色应用（V2 Phase 2）：8 色进 themeOverrides（复用 AI 配色的应用语义：清空覆盖写整套）
+function onVisualColors(colors) {
+  for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
+  Object.assign(themeOverrides, colors); // 自动保存链路既有（themeSnapshot watch）
+}
+
 // 首次进入/切换任务同步视觉图状态（Phase 7）：与 onVisualImagesChange 同源逻辑
 // immediate 立即回调覆盖首次挂载；切换任务时先由上方重置块清零，再由此异步回填
 watch(() => props.task.id, async () => {
@@ -808,7 +814,7 @@ async function downloadAllImages() {
         <template v-else-if="activeStep === 'visual'">
           <VisualPanel :task-id="task.id" :title="title" :summary="summary" :content="content" :material="materialPayload()"
             :theme-id="themeId" :theme-overrides="{ ...themeOverrides }" v-model:style-preset="stylePreset"
-            :bound-images="boundImages" @images-change="onVisualImagesChange" />
+            :bound-images="boundImages" @images-change="onVisualImagesChange" @apply-colors="onVisualColors" />
           <p class="step-hint">生成视觉图自动进入文章：封面直接生效，章节卡绑定正文图位</p>
         </template>
 
