@@ -812,7 +812,7 @@ async function downloadAllImages() {
 
         <!-- ④ 视觉设计（Phase 2 独立成步）：Mock 面板，Phase 3 接真实数据 -->
         <template v-else-if="activeStep === 'visual'">
-          <VisualPanel :task-id="task.id" :title="title" :summary="summary" :content="content" :material="materialPayload()"
+          <VisualPanel :task-id="task.id" :title="title" :summary="summary" v-model:content="content" :material="materialPayload()"
             :theme-id="themeId" :theme-overrides="{ ...themeOverrides }" v-model:style-preset="stylePreset"
             :bound-images="boundImages" @images-change="onVisualImagesChange" @apply-colors="onVisualColors" />
           <p class="step-hint">生成视觉图自动进入文章：封面直接生效，章节卡绑定正文图位</p>

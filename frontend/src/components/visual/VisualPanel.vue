@@ -14,15 +14,19 @@ import VisualSuggest from './VisualSuggest.vue'; // AI 视觉建议（Phase 6）
 import VisualDesignAI from './VisualDesignAI.vue'; // AI 视觉设计（V2 Phase 2）
 import VisualEditor from './VisualEditor.vue'; // 字段编辑（V2 Phase 1）
 import { COMPOSITIONS, COVER_COMPOSITIONS, SECTION_COMPOSITIONS } from '../../utils/compositions.js';
+import { ensurePlaceholder } from '../../utils/placeholder.js'; // 占位对齐（V2 Phase 3）
 
 const props = defineProps({
-  taskId: String, title: String, summary: String, content: String, material: Object,
+  taskId: String, title: String, summary: String, material: Object,
   themeId: String, themeOverrides: Object, boundImages: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['images-change', 'apply-colors']);
 
 // 风格状态提升到 TaskDetail（Phase 2）：正文排版预览与视觉卡共用同一 stylePreset
 const stylePreset = defineModel('stylePreset', { type: String, default: 'journal' });
+
+// 正文双向绑定（V2 Phase 3）：章节卡补占位需要回写正文（模式同 ImageWorkspace）
+const contentModel = defineModel('content', { type: String, default: '' });
 
 // 任务图片（选择器数据源 + 默认主图推导）
 const images = ref([]);
@@ -129,6 +133,8 @@ async function generateSectionCard() {
     // 目标槽位已有图：解绑回库（用户真实照片优先保留，视觉卡可随时重新生成）
     const occupying = images.value.find((i) => i.type === 'content' && i.position === cardSlot.value);
     if (occupying) await updateImage(occupying.id, { position: 0 });
+    // 绑定槽位超出正文占位数 → 自动补占位（§11"插入正文"完整语义；确定性操作非 AI 决策）
+    contentModel.value = ensurePlaceholder(contentModel.value, cardSlot.value, cardData.title || '章节卡');
     await uploadImage(file, { taskId: props.taskId, type: 'content', position: cardSlot.value, caption: cardData.title || '章节卡', source: 'ai' });
     await refreshImages();
     emit('images-change'); // 通知配图工作台/步骤条同步
@@ -145,7 +151,7 @@ async function generateSectionCard() {
     <h3>视觉设计</h3>
     <VisualTemplateSelector v-model="stylePreset" />
     <!-- AI 视觉建议（Phase 6）：分析文章 → 一键预填封面/章节卡文案 -->
-    <VisualSuggest :title="title" :summary="summary" :content="content" :material="material"
+    <VisualSuggest :title="title" :summary="summary" :content="contentModel" :material="material"
       @apply-cover="onApplyCover" @apply-card="onApplyCard" />
     <!-- AI 视觉设计（V2 Phase 2）：参考图 → 全维度分析 → 3 方案 -->
     <VisualDesignAI @apply-plan="onApplyPlan" />
