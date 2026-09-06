@@ -1,6 +1,6 @@
 // AI 统一入口：draft/title/summary/rewrite 四个动作，Key 只在本函数端使用
 import { requireAuth } from './lib/auth.mjs';
-import { callLLM } from './lib/ai-providers.mjs';
+import { callLLM, callVisionLLM } from './lib/ai-providers.mjs';
 import { PROMPTS } from './lib/prompts.mjs';
 
 export default async (req) => {
@@ -15,8 +15,13 @@ export default async (req) => {
   if (!build) {
     return new Response(JSON.stringify({ error: `未知动作 ${action}` }), { status: 400 });
   }
+  // 视觉动作走视觉直调（Phase 5）：不进文本 fallback 链
+  const VISION_ACTIONS = new Set(['gen_skin_vision']);
   try {
-    const text = await callLLM(build(payload || {}));
+    const messages = build(payload || {});
+    const text = VISION_ACTIONS.has(action)
+      ? await callVisionLLM(messages)
+      : await callLLM(messages);
     return new Response(JSON.stringify({ text }), {
       headers: { 'Content-Type': 'application/json' },
     });

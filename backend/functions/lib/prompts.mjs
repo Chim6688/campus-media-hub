@@ -140,6 +140,40 @@ ${p.text.slice(0, 2000)}`,
 {"pageBg":"#...","accentA":"#...","accentB":"#...","ink":"#...","cardBg":"#...","cream":"#...","creamBorder":"#...","creamText":"#..."}`,
     },
   ],
+  // 识图生成皮肤+风格（Phase 5）：参考图 → 8 色 + stylePreset；前端 parseVisionSkin 清洗
+  gen_skin_vision: (p) => [
+    { role: 'system', content: '你是公众号排版视觉分析师，擅长从参考图中提取配色与视觉气质。' },
+    {
+      role: 'user',
+      content: [
+        // 视觉消息：参考图（前端压缩后的 base64 dataURL）
+        { type: 'image_url', image_url: { url: p.imageBase64 || '' } },
+        {
+          type: 'text',
+          text: `分析这张参考图的配色与视觉气质，为推文排版生成配色方案。补充描述：${p.text || '（无）'}
+
+输出一个 JSON 对象，包含两部分：
+第一部分 colors——以下 8 个字段的 hex 颜色值（#rrggbb 格式），从图中提取或按气质衍生：
+- pageBg：页面底色，必须浅色（如 #F7F5F0）
+- accentA：强调色A，取图中最鲜明的主题色
+- accentB：强调色B，与 accentA 和谐的辅助色
+- ink：正文与描边墨色，必须深色保证可读（如 #3E3E3E）
+- cardBg：卡片底色，接近白色
+- cream：落款卡底色，浅色
+- creamBorder：落款卡描边，比 cream 深一档
+- creamText：落款卡文字，灰色调
+
+第二部分 stylePreset——从以下三个中严格选一个（按图的整体气质）：
+- "journal"：手账杂志感（留白多、细线、轻装饰）
+- "bold"：大色块感（高对比、强标题、几何结构）
+- "soft"：柔和感（低对比、圆角、清新）
+
+严格按 JSON 输出，不要任何其他文字，不要 markdown 代码块包裹，如：
+{"colors":{"pageBg":"#...","accentA":"#...","accentB":"#...","ink":"#...","cardBg":"#...","cream":"#...","creamBorder":"#...","creamText":"#..."},"stylePreset":"soft"}`,
+        },
+      ],
+    },
+  ],
 
   // AI 图片建议（V1.0 Phase 5，§14/§19）：分析文章 → 推荐配图位置/画面/理由；AI 只建议，小编决策
   image_suggestions: (p) => [

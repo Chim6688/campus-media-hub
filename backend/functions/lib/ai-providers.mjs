@@ -7,6 +7,13 @@ const PROVIDERS = {
     key: process.env.ZHIPU_API_KEY,
     label: '智谱 GLM',
   },
+  // 视觉供应商（Phase 5）：智谱同 Key 走视觉模型，仅识图动作使用，不进文本 fallback 链
+  'zhipu-vision': {
+    baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    model: process.env.ZHIPU_VISION_MODEL || 'glm-4v-flash',
+    key: process.env.ZHIPU_API_KEY,
+    label: '智谱 GLM 视觉',
+  },
   deepseek: {
     baseURL: 'https://api.deepseek.com',
     model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
@@ -57,8 +64,8 @@ async function callOne(provider, messages) {
 // 统一入口：优先当前供应商，失败自动 fallback 到其他已配置的供应商
 export async function callLLM(messages, { provider: providerName } = {}) {
   const name = providerName || process.env.AI_PROVIDER || 'zhipu';
-  // fallback 顺序：指定供应商在前，其余按配置了 Key 的排后面
-  const ordered = [name, ...Object.keys(PROVIDERS).filter((k) => k !== name)];
+  // fallback 顺序：指定供应商在前，其余按配置了 Key 的排后面（视觉供应商不进文本链）
+  const ordered = [name, ...Object.keys(PROVIDERS).filter((k) => k !== name && k !== 'zhipu-vision')];
   const errors = [];
   for (const k of ordered) {
     const p = PROVIDERS[k];
@@ -70,4 +77,12 @@ export async function callLLM(messages, { provider: providerName } = {}) {
     }
   }
   throw new Error(`所有 AI 供应商调用失败：${errors.join(' | ')}`);
+}
+
+// 视觉直调（Phase 5）：单供应商、不 fallback——纯文本供应商收到图片消息必报错，
+// fallback 链只会把超时翻倍；Key 未配置/调用失败直接抛错给前端提示
+export async function callVisionLLM(messages) {
+  const p = PROVIDERS['zhipu-vision'];
+  if (!p.key) throw new Error('视觉模型未配置（缺少 ZHIPU_API_KEY）');
+  return callOne(p, messages);
 }
