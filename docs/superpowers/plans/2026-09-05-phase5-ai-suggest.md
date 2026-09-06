@@ -1,4 +1,4 @@
-﻿# Phase 5 AI 图片建议 · 实施计划
+﻿﻿# Phase 5 AI 图片建议 · 实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
