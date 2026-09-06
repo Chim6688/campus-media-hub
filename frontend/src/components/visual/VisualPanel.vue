@@ -36,6 +36,8 @@ const error = ref('');
 // 视觉卡数据：真实任务数据装配（title/summary/material 来自 TaskDetail）
 const coverData = reactive(buildCoverData({ title: props.title, summary: props.summary, material: props.material }, null));
 const cardData = reactive(buildSectionData(1, { title: props.title, summary: props.summary }, null));
+// 辅图（V2 Phase 3）：photo-stack 叠放构图第二图（无则渲染层复用主图）
+if (!cardData.image2Url) cardData.image2Url = '';
 // 章节卡目标槽位：默认 1，可改（绑定第 N 个 [配图：] 占位）
 const cardSlot = ref(1);
 // 构图状态（V2 Phase 1）：按类型分别记忆，会话态（入库持久化留 Phase 2）
@@ -67,6 +69,7 @@ const picker = reactive({ show: false, target: '' }); // target: 'cover' | 'card
 function openPicker(target) { picker.target = target; picker.show = true; }
 function onPick(img) {
   if (picker.target === 'cover') coverData.imageUrl = img.url;
+  else if (picker.target === 'card2') cardData.image2Url = img.url;
   else cardData.imageUrl = img.url;
   picker.show = false;
 }
@@ -188,6 +191,7 @@ async function generateSectionCard() {
           <input type="number" v-model.number="cardSlot" min="1" max="9" />
         </label>
         <button type="button" :disabled="exporting" @click="openPicker('card')">📷 换图</button>
+        <button v-if="composition.section === 'section-photo-stack'" type="button" :disabled="exporting" @click="openPicker('card2')">📷 换辅图</button>
         <button type="button" class="primary" :disabled="exporting" @click="generateSectionCard">
           {{ exporting ? '生成中…' : '生成并绑定' }}
         </button>
