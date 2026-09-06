@@ -74,6 +74,7 @@ export default async (req) => {
       patch.layout_theme = {
         id: String(body.layout_theme.id || ''),
         overrides: body.layout_theme.overrides || {},
+        stylePreset: String(body.layout_theme.stylePreset || 'journal'), // Phase 2：结构风格（缺省 journal 兼容历史数据）
       };
     }
     // 整改清单（P0-2：整体更新，模式同 material）
