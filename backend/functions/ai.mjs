@@ -16,7 +16,7 @@ export default async (req) => {
     return new Response(JSON.stringify({ error: `未知动作 ${action}` }), { status: 400 });
   }
   // 视觉动作走视觉直调（Phase 5）：不进文本 fallback 链
-  const VISION_ACTIONS = new Set(['gen_skin_vision']);
+  const VISION_ACTIONS = new Set(['gen_skin_vision', 'visual_analysis']);
   try {
     const messages = build(payload || {});
     const text = VISION_ACTIONS.has(action)

@@ -174,6 +174,36 @@ ${p.text.slice(0, 2000)}`,
       ],
     },
   ],
+  // AI 视觉分析（V2 Phase 2，§4）：参考图 → 全维度分析（类型/构图/风格/配色/元素/理由/建议）
+  // 前端 parseVisualAnalysis 三白名单清洗 + buildDesignPlans 生成 A/B/C 方案
+  visual_analysis: (p) => [
+    { role: 'system', content: '你是资深平面设计分析师，擅长解构海报的构图方式、配色体系与视觉层次。' },
+    {
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: p.imageBase64 || '' } },
+        {
+          type: 'text',
+          text: `解构这张参考图的设计，为公众号视觉图（封面海报或章节卡）提供设计分析。补充描述：${p.text || '（无）'}
+
+分析维度：主色/辅色、明度、对比度、视觉情绪、构图方式、图片数量与位置关系、字体层级、装饰元素。
+
+输出一个 JSON 对象：
+1. visualType："cover" 或 "section"（判断这张图更适合作封面首图还是章节卡）
+2. composition：从以下严格选一个（按图的构图方式）：
+   cover-hero（上信息下大图横幅）/ cover-circle（圆形照片构图）/ cover-editorial（杂志错位留白）/ cover-photo（满版大图）/ cover-minimal（极简文字）/
+   section-photo-stack（照片叠放）/ section-editorial（杂志章节页）/ section-split（左右分栏）/ section-minimal（极简章节）/ section-full-photo（满版图浮层）
+3. stylePreset："journal"（手账杂志：留白细线轻装饰）/"bold"（大色块：高对比强标题）/"soft"（柔和：低对比圆角）三选一
+4. palette：8 个 hex 颜色数组，按序：[页面底色, 主强调色, 卡片底色, 墨色文字, 落款文字色, 落款描边色, 落款底色, 次强调色]（从图提取，明度对比须可读）
+5. elements：图中的设计元素标识数组，如 ["chapterNumber","chapterTitle","photoStack","divider","tag","dateBadge"]
+6. layoutReason：一句话（40 字内）说明构图判断依据
+7. recommendations：2-5 条具体设计建议（每条 40 字内）
+
+严格按 JSON 输出，不要任何其他文字，不要 markdown 代码块包裹。`,
+        },
+      ],
+    },
+  ],
 
   // AI 图片建议（V1.0 Phase 5，§14/§19）：分析文章 → 推荐配图位置/画面/理由；AI 只建议，小编决策
   image_suggestions: (p) => [
