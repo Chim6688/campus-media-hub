@@ -1,11 +1,16 @@
 <script setup>
-import { ref, reactive, computed, nextTick, watch, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, nextTick, watch } from 'vue';
 import { request, uploadPDF, listImages } from '../api/client.js';
 import { markdownToWechatHTML, markdownToPlainText } from '../utils/wechat-format.js';
 import { THEMES } from '../utils/themes.js';
-import { normalizeLines, makeItem } from '../utils/checklist.mjs'; // 整改清单纯函数（与后端双份同步）
 import { computeSteps } from '../utils/steps.js'; // 流程步骤条纯函数（P1-3）
 import { buildPrecheck } from '../utils/precheck.js'; // 发布前检查纯函数（Phase 6，§20）
+import { ensureSignatureText } from '../utils/signature.js'; // 文末署名纯函数（与 StepWriting 共用）
+import { useAutoSave } from '../composables/useAutoSave.js'; // 自动保存统一通道（总方案 §8）
+import { useAiTools } from '../composables/useAiTools.js'; // AI 调用封装 + 等待进度（素材一键成稿用）
+import StepCheck from './steps/StepCheck.vue'; // ⑤ 检查步（拆分自本组件）
+import StepReview from './steps/StepReview.vue'; // ⑥ 审核步 + 打回弹窗（拆分自本组件）
+import StepWriting from './steps/StepWriting.vue'; // ② 写稿步 + AI 工具条与弹窗（拆分自本组件）
 import ThemeGallery from './ThemeGallery.vue'; // 模板画廊弹窗（批1）
 import ImageWorkspace from './ImageWorkspace.vue'; // 配图工作台（V1.0 Phase 3）
 import VisualPanel from './visual/VisualPanel.vue'; // 视觉设计面板（V1.0 Phase 1）
@@ -18,35 +23,10 @@ const emit = defineEmits(['back', 'refresh']);
 const title = ref(props.task.title || '');
 const summary = ref(props.task.summary || '');
 const content = ref(props.task.content || '');
-const saving = ref(false);
-const savedAt = ref('');
+// saving/savedAt/autoSaved 由 useAutoSave 提供；aiLoading/aiElapsed 由 useAiTools 提供
 const error = ref('');
-const aiLoading = ref(''); // 当前进行中的 AI 动作名，用于按钮禁用态
-const contentRef = ref(null); // 正文 textarea 引用，用于取选中文字
 
-// ========== 通用输入弹窗 ==========
-// 嵌入式预览（iframe）不支持原生 prompt()，统一用页内弹窗替代
-const modal = reactive({ show: false, message: '', value: '', resolve: null });
-const modalInput = ref(null);
-
-// 用法：const text = await askUser('提示语')；取消返回 null
-function askUser(message, defaultValue = '') {
-  return new Promise((resolve) => {
-    modal.message = message;
-    modal.value = defaultValue;
-    modal.resolve = resolve;
-    modal.show = true;
-    nextTick(() => modalInput.value?.focus());
-  });
-}
-function confirmModal() {
-  modal.show = false;
-  modal.resolve?.(modal.value);
-}
-function cancelModal() {
-  modal.show = false;
-  modal.resolve?.(null);
-}
+// ========== 通用输入弹窗已随 StepWriting 下沉（useAskUser 在写稿步组件内使用） ==========
 
 // ========== 素材面板（策划书解析 + 人工补充） ==========
 const parsing = ref(false);
@@ -159,204 +139,53 @@ async function generateFullDraft() {
   }
 }
 
-// 切换任务时重置本地编辑态（switching 标记避免重置触发自动保存）
+// switching：任务切换回填保护标记（resetEditor 使用；回填触发的编辑源 watch 在保护内跳过自动保存）
 let switching = false;
-watch(() => props.task.id, () => {
-  switching = true;
-  title.value = props.task.title || '';
-  summary.value = props.task.summary || '';
-  content.value = props.task.content || '';
-  fillMaterial(props.task.material);
-  // 排版主题回填：优先任务级 layout_theme，无则回退全局记忆（在 switching 保护内，避免触发自动保存覆盖）
-  themeId.value = props.task.layout_theme?.id || localStorage.getItem('themeId') || 'greenPink';
-  for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
-  Object.assign(themeOverrides, props.task.layout_theme?.overrides || {});
-  stylePreset.value = props.task.layout_theme?.stylePreset || 'journal';
-  // 整改清单回填：旧任务无清单 → 空数组（不阻塞推进）
-  checklist.value = Array.isArray(props.task.review_checklist) ? [...props.task.review_checklist] : [];
-  if (saveTimer) clearTimeout(saveTimer);
-  nextTick(() => (switching = false));
-});
 
-// ========== 自动保存（防抖 2 秒，含素材字段） ==========
-let saveTimer = null;
-const autoSaved = ref(false); // 区分"已自动保存"与手动"已保存"
-
+// ========== 自动保存（总方案 §8 单通道，逻辑在 useAutoSave composable；宿主只供数据/落库/反馈） ==========
 // 素材序列化快照：任一素材字段变化都触发防抖保存
 const materialSnapshot = computed(() => JSON.stringify(materialPayload()));
 
-function scheduleAutoSave() {
-  if (switching) return; // 任务切换时的回填不触发保存
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => save(true), 2000);
+// 保存 body 组装：doSave 时此刻读取最新全量编辑态（防抖合并后取最后一次）
+function buildSaveBody() {
+  ensureSignature(); // 双保险：保存时无署名则自动追加
+  const body = {
+    id: props.task.id,
+    title: title.value,
+    summary: summary.value,
+    content: content.value,
+    layout_theme: { id: themeId.value, overrides: { ...themeOverrides }, stylePreset: stylePreset.value }, // 排版主题+结构风格随任务持久化
+  };
+  if (hasMaterial()) body.material = materialPayload(); // 素材随文稿一起持久化
+  if (visualState.value) body.visual_state = visualState.value; // v6：视觉编辑态（构图/槽位/卡文案/选图）
+  return body;
 }
 
-watch([title, summary, content, materialSnapshot], scheduleAutoSave);
+async function persistTask(body) {
+  await request('/api/tasks', { method: 'PATCH', body: JSON.stringify(body) });
+}
 
-onBeforeUnmount(() => {
-  if (saveTimer) clearTimeout(saveTimer);
-  stopElapse(); // P2-7：卸载时清掉计时器防泄漏
+// 返回 saving/savedAt/autoSaved/save/markDirty/cancelPending（宿主调用点与模板引用同名）
+const { saving, savedAt, autoSaved, markDirty, save, cancelPending } = useAutoSave({
+  getBody: buildSaveBody,
+  persist: persistTask,
+  isSwitching: () => switching,
+  onError: (msg) => { error.value = msg; },
+  onSaved: () => emit('refresh'), // 同步列表数据
 });
 
-// 保存文稿（isAuto=true 表示由防抖自动触发）
-async function save(isAuto = false) {
-  saving.value = true;
-  try {
-    ensureSignature(); // 双保险：保存时无署名则自动追加
-    const body = {
-      id: props.task.id,
-      title: title.value,
-      summary: summary.value,
-      content: content.value,
-      layout_theme: { id: themeId.value, overrides: { ...themeOverrides }, stylePreset: stylePreset.value }, // 排版主题+结构风格随任务持久化
-    };
-    if (hasMaterial()) body.material = materialPayload(); // 素材随文稿一起持久化
-    await request('/api/tasks', {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    });
-    savedAt.value = new Date().toLocaleTimeString();
-    autoSaved.value = isAuto;
-    emit('refresh'); // 同步列表数据
-  } finally {
-    saving.value = false;
-  }
-}
+watch([title, summary, content, materialSnapshot], markDirty);
 
-// 署名双保险：文末无"责编 | 姓名"格式时自动追加（规范检查硬性要求）
+// 署名双保险：文末无"责编 | 姓名"格式时自动追加（规范检查硬性要求；纯函数见 utils/signature.js）
 function ensureSignature() {
-  if (content.value && !/责编\s*[|｜]\s*\S+/.test(content.value)) {
-    content.value = content.value.trimEnd() + `\n\n责编 | ${props.task.author}`;
-  }
+  content.value = ensureSignatureText(content.value, props.task.author);
 }
 
-// ========== AI 工具条 ==========
+// ========== AI 工具条（useAiTools composable：callAI 封装 + aiLoading 禁用态 + 等待进度 P2-7） ==========
+const { aiLoading, aiElapsed, callAI, startElapse, stopElapse } = useAiTools();
 
-// ========== P2-7：AI 等待进度（超 8s 显示已等待秒数，避免像卡死） ==========
-const aiElapsed = ref(0);
-let aiTimer = null;
-function startElapse() {
-  stopElapse();
-  aiElapsed.value = 0;
-  aiTimer = setInterval(() => (aiElapsed.value += 1), 1000);
-}
-function stopElapse() {
-  if (aiTimer) clearInterval(aiTimer);
-  aiTimer = null;
-  aiElapsed.value = 0;
-}
-
-// 统一 AI 调用封装
-async function callAI(action, payload) {
-  aiLoading.value = action;
-  startElapse(); // 计时与加载态同生命周期：进度提示依赖 aiElapsed
-  try {
-    const data = await request('/api/ai', {
-      method: 'POST',
-      body: JSON.stringify({ action, payload }),
-    });
-    return data.text;
-  } finally {
-    aiLoading.value = '';
-    stopElapse();
-  }
-}
-
-// 解析初稿：按"标题：/摘要：/正文："结构拆开填入表单
-async function generateDraft() {
-  error.value = '';
-  const notes = await askUser('补充要点/素材（可留空）：');
-  if (notes === null) return; // 取消 = 放弃生成
-  try {
-    const text = await callAI('draft', {
-      theme: props.task.theme,
-      type: props.task.type,
-      notes,
-    });
-    const titleMatch = text.match(/标题：(.+)/);
-    const summaryMatch = text.match(/摘要：(.+)/);
-    const bodyMatch = text.match(/正文：\n?([\s\S]+)/);
-    if (titleMatch) title.value = titleMatch[1].trim();
-    if (summaryMatch) summary.value = summaryMatch[1].trim();
-    if (bodyMatch) content.value = bodyMatch[1].trim();
-    ensureSignature(); // AI 初稿自动追加责编署名，避免用户忘记
-    error.value = 'AI 初稿已生成，请检查后点"保存"';
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
-// 生成 3 个候选标题，按钮点选（不再手动输入序号）
-const titlePicker = reactive({ show: false, options: [] });
-
-async function generateTitles() {
-  error.value = '';
-  try {
-    const text = await callAI('title', { title: title.value, content: content.value });
-    // 按行拆分、去掉"1. "编号前缀、过滤空行
-    titlePicker.options = text
-      .split('\n')
-      .map((l) => l.replace(/^\s*\d+[.、]\s*/, '').trim())
-      .filter(Boolean);
-    if (!titlePicker.options.length) {
-      error.value = 'AI 未返回有效标题，请重试';
-      return;
-    }
-    titlePicker.show = true;
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
-// 点选某个标题：填入标题框并关闭弹窗
-function pickTitle(t) {
-  title.value = t;
-  titlePicker.show = false;
-}
-
-// AI 生成摘要
-async function generateSummary() {
-  error.value = '';
-  try {
-    summary.value = await callAI('summary', { title: title.value, content: content.value });
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
-// 选中改写：快捷按钮 + 自定义指令（不再手动输入序号）
-const rewritePicker = reactive({ show: false, custom: '' });
-const rewritePresets = ['更口语化', '精简一点', '扩写细节', '更有数据感'];
-// 捕获选中上下文：弹窗操作后 textarea 失焦，提前记录选中区间更稳妥
-const rewriteCtx = { selection: '', start: 0, end: 0 };
-
-function rewriteSelection() {
-  const el = contentRef.value;
-  rewriteCtx.selection = el.value.slice(el.selectionStart, el.selectionEnd);
-  if (!rewriteCtx.selection) {
-    error.value = '请先在正文中选中要改写的文字';
-    return;
-  }
-  rewriteCtx.start = el.selectionStart;
-  rewriteCtx.end = el.selectionEnd;
-  rewritePicker.custom = '';
-  rewritePicker.show = true;
-}
-
-// 执行改写并替换选中段（Ctrl+Z 可撤销）
-async function execRewrite(instruction) {
-  if (!instruction || !rewriteCtx.selection) return;
-  rewritePicker.show = false;
-  error.value = '';
-  try {
-    const newText = await callAI('rewrite', { selection: rewriteCtx.selection, instruction });
-    const el = contentRef.value;
-    content.value = el.value.slice(0, rewriteCtx.start) + newText + el.value.slice(rewriteCtx.end);
-    error.value = '已改写选中文字（Ctrl+Z 可撤销）';
-  } catch (e) {
-    error.value = e.message;
-  }
-}
+// 写稿步的 AI 生成/改写/标题候选逻辑已随 StepWriting 组件下沉（含三个弹窗）；
+// 父级保留 title/summary/content 数据源与自动保存链路，v-model 双向直连
 
 // ========== 工作流步骤导航（V1.0 Phase 1：分步引导工作台） ==========
 // 六步完成度由纯函数计算；activeStep 是本地 UI 态（当前展示哪一步的操作面板）
@@ -368,41 +197,12 @@ const coverOk = ref(false);
 const visualOk = ref(false);
 const steps = computed(() => computeSteps(props.task, boundImages.value.length, visualOk.value));
 const activeStep = ref(steps.value.find((s) => s.active)?.key || 'material');
-// 任务切换时落到计算出的当前步（纯展示切换，不触发保存链路）；绑定图清零待工作台重拉后回填
-watch(() => props.task.id, () => {
-  boundImages.value = [];
-  coverOk.value = false;
-  visualOk.value = false;
-  activeStep.value = steps.value.find((s) => s.active)?.key || 'material';
-});
-
-// 视觉面板图片变更（Phase 3+4）：封面生成/章节卡绑定后，重拉图片同步步骤条与封面状态
-// 复用 ImageWorkspace 的刷新语义：封面状态影响发布前检查，绑定数影响步骤条
-async function onVisualImagesChange() {
-  try {
-    const data = await listImages(props.task.id);
-    const imgs = data.images;
-    boundImages.value = imgs.filter((i) => i.type === 'content' && i.position > 0)
-      .sort((a, b) => a.position - b.position);
-    coverOk.value = imgs.some((i) => i.type === 'cover');
-    visualOk.value = imgs.some((i) => i.source === 'ai');
-  } catch { /* 静默失败：视觉面板已本地刷新，下次进入步骤自然同步 */ }
-}
 
 // AI 视觉设计配色应用（V2 Phase 2）：8 色进 themeOverrides（复用 AI 配色的应用语义：清空覆盖写整套）
 function onVisualColors(colors) {
   for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
   Object.assign(themeOverrides, colors); // 自动保存链路既有（themeSnapshot watch）
 }
-
-// 首次进入/切换任务同步视觉图状态（Phase 7）：与 onVisualImagesChange 同源逻辑
-// immediate 立即回调覆盖首次挂载；切换任务时先由上方重置块清零，再由此异步回填
-watch(() => props.task.id, async () => {
-  try {
-    const data = await listImages(props.task.id);
-    visualOk.value = (data.images || []).some((i) => i.source === 'ai');
-  } catch { /* 拉取失败静默：视觉面板打开时会自行刷新 */ }
-}, { immediate: true });
 
 // 固定步序：上一步/下一步按此导航（纯 UI 引导，不做任何校验拦截）；Phase 2 起含视觉步
 const STEP_ORDER = ['material', 'draft', 'images', 'visual', 'layout', 'check', 'review'];
@@ -447,56 +247,42 @@ function formatAdvanceError(e) {
 // ========== 整改清单（P0-2：打回绑定清单，清零才能推回审核） ==========
 // 本地清单副本：勾销即时反映，整表 PATCH 持久化（模式同 material）
 const checklist = ref(Array.isArray(props.task.review_checklist) ? [...props.task.review_checklist] : []);
-// 打回弹窗状态：input 为多行录入框（手动逐行 / 粘贴老师留言后 AI 整理）
-const rejectModal = reactive({ show: false, input: '', loading: false });
 
 // 未完成条数：>0 时推进按钮置灰（体验层提示，后端 400 才是真门禁）
 const checklistRemaining = computed(() => checklist.value.filter((i) => !i.done).length);
 
-// 打回：弹窗录入清单（手动逐条 / 粘贴老师留言 AI 整理）
-function openRejectModal() {
-  rejectModal.show = true;
-  rejectModal.input = '';
-}
-
-// AI 整理：粘贴的老师微信留言 → 逐条意见（整理后仍可手动增删改）
-async function aiOrganizeNotes() {
-  if (!rejectModal.input.trim()) return;
-  rejectModal.loading = true;
+// 打回执行（StepReview 打回弹窗上抛已归一化的条目；空数组=空录入，沿用现有清单同旧打回行为）
+async function applyReject(items) {
+  const final = items.length ? items : checklist.value;
+  checklist.value = final;
+  error.value = '';
   try {
-    const text = await callAI('organize_review_notes', { text: rejectModal.input });
-    // 剥离可能的代码块包裹后按 JSON 数组解析
-    const arr = JSON.parse(text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim());
-    if (Array.isArray(arr) && arr.length) rejectModal.input = arr.join('\n');
-    else error.value = 'AI 未识别出意见，请手动逐行录入';
+    await request('/api/tasks', {
+      method: 'PATCH',
+      body: JSON.stringify({ id: props.task.id, review_checklist: final, status: 'writing' }),
+    });
+    Object.assign(props.task, { review_checklist: final, status: 'writing' });
+    emit('refresh');
   } catch (e) {
-    error.value = 'AI 整理失败，请手动逐行录入：' + e.message;
-  } finally {
-    rejectModal.loading = false;
+    // P0：打回失败可见（此前静默 unhandled）；清单留在本地，下次勾销/打回全量 PATCH 会自然收敛
+    error.value = `打回失败：${e.message}`;
   }
-}
-
-// 确认打回：录入内容归一化 → 清单条目，清单与状态一起 PATCH（空录入沿用现有清单，同旧打回行为）
-async function confirmReject() {
-  const lines = normalizeLines(rejectModal.input);
-  const items = lines.length ? lines.map(makeItem) : checklist.value; // 允许空清单直接打回（同现状）
-  rejectModal.show = false;
-  checklist.value = items;
-  await request('/api/tasks', {
-    method: 'PATCH',
-    body: JSON.stringify({ id: props.task.id, review_checklist: items, status: 'writing' }),
-  });
-  Object.assign(props.task, { review_checklist: items, status: 'writing' });
-  emit('refresh');
 }
 
 // 勾销/恢复某条：翻转 done 后整表 PATCH 持久化
 async function toggleChecklistItem(item) {
-  item.done = !item.done;
-  await request('/api/tasks', {
-    method: 'PATCH',
-    body: JSON.stringify({ id: props.task.id, review_checklist: checklist.value }),
-  });
+  const prev = item.done;
+  item.done = !prev;
+  error.value = '';
+  try {
+    await request('/api/tasks', {
+      method: 'PATCH',
+      body: JSON.stringify({ id: props.task.id, review_checklist: checklist.value }),
+    });
+  } catch (e) {
+    item.done = prev; // P0：失败回滚勾选态，避免本地与服务端不一致
+    error.value = `清单保存失败：${e.message}`;
+  }
 }
 
 // ========== 规范检查 ==========
@@ -511,7 +297,10 @@ const precheckItems = computed(() =>
     { coverOk: coverOk.value, boundCount: boundImages.value.length, visualOk: visualOk.value, report: report.value },
   ),
 );
-const precheckReady = computed(() => precheckItems.value.every((i) => i.ok));
+// 提交门禁只看阻断项（block）；建议项（视觉图=Warning，总方案 §9）不拦提交——作者端/审核端同一判定
+const precheckReady = computed(() => precheckItems.value.filter((i) => i.block !== false).every((i) => i.ok));
+// 未满足的建议项数：核心通过但建议未做时，状态行提示"可提交"
+const precheckAdvisoryCount = computed(() => precheckItems.value.filter((i) => i.block === false && !i.ok).length);
 
 // 先保存最新内容再检查，保证检查的是当前编辑态
 async function runCheck() {
@@ -528,29 +317,6 @@ async function runCheck() {
   }
 }
 
-// ========== 审核批注 ==========
-
-const commentText = ref('');
-
-// 提交批注：任何状态可加（写作者留言/审核人批注）
-async function addComment() {
-  if (!commentText.value.trim()) return;
-  error.value = '';
-  try {
-    await request('/api/tasks', {
-      method: 'PATCH',
-      body: JSON.stringify({
-        id: props.task.id,
-        comment: { by: localStorage.getItem('authorName') || '匿名', text: commentText.value.trim() },
-      }),
-    });
-    commentText.value = '';
-    await emitRefreshAndGet(); // 重新拉取任务展示最新批注
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
 // ========== 微信排版预览 + 复制到公众号 ==========
 
 // 模板皮肤：任务级持久化（task.layout_theme），无则回退 localStorage
@@ -559,6 +325,9 @@ const themeId = ref(props.task.layout_theme?.id || localStorage.getItem('themeId
 const themeOverrides = reactive({ ...(props.task.layout_theme?.overrides || {}) });
 // 结构风格（Phase 2）：任务级持久化于 layout_theme.stylePreset，缺省 journal（历史数据零迁移兼容）
 const stylePreset = ref(props.task.layout_theme?.stylePreset || 'journal');
+// 视觉设计编辑态（v6，总方案 §7.1）：VisualPanel v-model 维护 → save() 并入 tasks.visual_state
+// 只在编辑上抛时更新；切换任务重置见 watch(task.id) 块
+const visualState = ref(props.task.visual_state || null);
 // 参数面板字段定义：type=color 为色板，type=range 为滑杆（值范围即 clamp）
 const OVERRIDES_SCHEMA = [
   { key: 'accentA', label: '强调色A', type: 'color' },
@@ -590,9 +359,11 @@ watch(themeId, () => {
   for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
 });
 
-// 主题快照进自动保存：皮肤与覆盖变化都触发防抖保存（switching 时由 scheduleAutoSave 内部跳过）
+// 主题快照进自动保存：皮肤与覆盖变化都触发防抖保存（switching 时由 markDirty 内部跳过）
 const themeSnapshot = computed(() => JSON.stringify({ id: themeId.value, overrides: themeOverrides, stylePreset: stylePreset.value }));
-watch(themeSnapshot, () => scheduleAutoSave());
+watch(themeSnapshot, () => markDirty());
+// 视觉编辑态进自动保存（v6）：VisualPanel 每次编辑上抛新对象 → markDirty 防抖统一通道（§8 单通道）
+watch(visualState, () => markDirty());
 
 // 右侧实时预览：Markdown → 手账卡片风 HTML（标题卡取标题字段，眉标用任务类型；overrides 传令牌覆盖）
 // images：配图工作台上报的绑定图（Phase 4 与复制/分享同源，占位→真实 <img>）
@@ -653,21 +424,7 @@ async function generateShareLink() {
   }
 }
 
-async function copyShareLink() {
-  try {
-    await navigator.clipboard.writeText(shareLink.value);
-  } catch {
-    // 降级：临时 textarea 选区复制
-    const el = document.createElement('textarea');
-    el.value = shareLink.value;
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand('copy');
-    el.remove();
-  }
-}
-
-// 拉最新任务数据（含 comments），通过 refresh 事件链同步
+// 拉最新任务数据（含 comments），StepReview 批注提交后 refresh-task 事件绑定此
 async function emitRefreshAndGet() {
   emit('refresh');
   const data = await request('/api/tasks');
@@ -675,38 +432,60 @@ async function emitRefreshAndGet() {
   if (fresh) Object.assign(props.task, fresh);
 }
 
-// ========== 发布准备（V1.0 Phase 8，§23）：published 态人工发布四步 ==========
-const publishBox = reactive({ loading: false, error: '' });
-
-// 获取全部图片：封面 + 绑定正文图逐张下载（fetch blob → a[download]，文件名带位置与说明）
-async function downloadAllImages() {
-  publishBox.loading = true;
-  publishBox.error = '';
-  try {
-    const { images } = await listImages(props.task.id);
-    // 发布需要的图：封面 + 已绑定正文图（按 position 排序，封面恒排最前）
-    const need = images.filter((i) => i.type === 'cover' || (i.type === 'content' && i.position > 0))
-      .sort((a, b) => (a.type === 'cover' ? -1 : b.type === 'cover' ? 1 : a.position - b.position));
-    if (!need.length) {
-      publishBox.error = '本任务没有封面或正文图片';
-      return;
-    }
-    for (const img of need) {
-      // 公共 URL 直读（v5 bucket public）；Supabase 跨域已放行 CORS
-      const blob = await (await fetch(img.url)).blob();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      const label = (img.caption || img.type).replace(/[\\/:*?"<>|\s]+/g, ''); // 文件名安全化
-      a.download = `${img.type === 'cover' ? '封面' : '第' + img.position + '图'}-${label}.${img.url.split('.').pop()}`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    }
-  } catch (e) {
-    publishBox.error = '图片下载失败：' + e.message;
-  } finally {
-    publishBox.loading = false;
-  }
+// ========== 任务切换统一收口（总方案 §10 第三层 resetEditor） ==========
+// 编辑态重置/信号回填只经此一处，任何子组件不得自己监听 task.id；
+// 置于 script 末尾：所有编辑态 ref（themeId/checklist/visualState 等）已声明完毕，
+// immediate watch 首次同步执行时无前向引用风险。
+// switching 保护整段回填：编辑源 watch 触发的 markDirty 在保护内跳过（不触发自动保存覆盖）
+function resetEditor(task) {
+  switching = true;
+  title.value = task.title || '';
+  summary.value = task.summary || '';
+  content.value = task.content || '';
+  fillMaterial(task.material);
+  // 排版主题回填：优先任务级 layout_theme，无则回退全局记忆
+  themeId.value = task.layout_theme?.id || localStorage.getItem('themeId') || 'greenPink';
+  for (const k of Object.keys(themeOverrides)) delete themeOverrides[k];
+  Object.assign(themeOverrides, task.layout_theme?.overrides || {});
+  stylePreset.value = task.layout_theme?.stylePreset || 'journal';
+  // 视觉设计编辑态回填（v6）：VisualPanel 重进视觉步时按此恢复
+  visualState.value = task.visual_state || null;
+  // 整改清单回填：旧任务无清单 → 空数组（不阻塞推进）
+  checklist.value = Array.isArray(task.review_checklist) ? [...task.review_checklist] : [];
+  cancelPending(); // 放弃旧任务未触发的 pending 编辑（脏标记与计时器一起清）
+  // 图片/视觉信号清零后落到计算出的当前步（纯展示切换，不触发保存链路）
+  boundImages.value = [];
+  coverOk.value = false;
+  visualOk.value = false;
+  activeStep.value = steps.value.find((s) => s.active)?.key || 'material';
+  // 回填触发的编辑源 watch（flush pre）在微任务队列先于 nextTick 执行，此时 switching 仍为 true → 安全
+  nextTick(async () => {
+    switching = false;
+    await refreshSignals(task.id); // 拉图回填 bound/cover/visualOk（首挂与切换共用）
+  });
 }
+
+// 拉取任务图片并回填信号（封面/绑定数/视觉图 OK）：切换重置与视觉面板变更共用
+async function refreshSignals(taskId) {
+  try {
+    const data = await listImages(taskId);
+    const imgs = data.images || [];
+    boundImages.value = imgs.filter((i) => i.type === 'content' && i.position > 0)
+      .sort((a, b) => a.position - b.position);
+    coverOk.value = imgs.some((i) => i.type === 'cover');
+    visualOk.value = imgs.some((i) => i.source === 'ai');
+  } catch { /* 静默失败：视觉面板打开时会自行刷新，下次进入步骤自然同步 */ }
+}
+
+// 视觉面板图片变更（Phase 3+4）：封面生成/章节卡绑定后，重拉图片同步步骤条与封面状态
+function onVisualImagesChange() {
+  refreshSignals(props.task.id);
+}
+
+// 任务切换：编辑态整体重置（immediate 覆盖首次挂载；此后 props.task.id 变化即重置）
+watch(() => props.task.id, (newId) => {
+  if (newId) resetEditor(props.task);
+}, { immediate: true });
 </script>
 
 <template>
@@ -775,32 +554,10 @@ async function downloadAllImages() {
           </div>
         </div>
 
-        <!-- ② 写稿：摘要 + AI 工具条 + 正文 Markdown 编辑 -->
+        <!-- ② 写稿：摘要 + AI 工具条 + 正文 Markdown 编辑（UI 与 AI 交互在 StepWriting，v-model 双向直连） -->
         <template v-else-if="activeStep === 'draft'">
-          <label>摘要</label>
-          <textarea v-model="summary" rows="2" placeholder="公众号推送摘要（可点 AI 生成）"></textarea>
-          <div class="ai-toolbar">
-            <button :disabled="!!aiLoading" @click="generateDraft">
-              {{ aiLoading === 'draft' ? '生成中…' : 'AI 初稿' }}
-            </button>
-            <button :disabled="!!aiLoading" @click="generateTitles">
-              {{ aiLoading === 'title' ? '生成中…' : 'AI 改标题' }}
-            </button>
-            <button :disabled="!!aiLoading" @click="generateSummary">
-              {{ aiLoading === 'summary' ? '生成中…' : 'AI 摘要' }}
-            </button>
-            <button :disabled="!!aiLoading" @click="rewriteSelection">
-              {{ aiLoading === 'rewrite' ? '改写中…' : '选中改写' }}
-            </button>
-          </div>
-          <!-- P2-7：长任务等待提示，超 8 秒才出现，避免误以为卡死 -->
-          <p v-if="aiElapsed >= 8" class="ai-progress">
-            ⏳ AI 正在处理（已等待 {{ aiElapsed }} 秒）… 长文生成约需 10-25 秒，请勿离开本页
-          </p>
-          <div class="editor-left">
-            <textarea ref="contentRef" v-model="content" rows="24" placeholder="正文 Markdown：## 小节、> 金句、[配图：说明]、文末署名"></textarea>
-            <p class="word-count">{{ content.length }} 字</p>
-          </div>
+          <StepWriting v-model:title="title" v-model:summary="summary" v-model:content="content"
+            :author="task.author" :theme="task.theme" :type="task.type" />
         </template>
 
         <!-- ③ 配图：封面/槽位/图片库工作台；photoNotes/content 双向绑定走既有自动保存链路 -->
@@ -810,11 +567,12 @@ async function downloadAllImages() {
             @bound-change="boundImages = $event" @cover-change="coverOk = $event" />
         </template>
 
-        <!-- ④ 视觉设计（Phase 2 独立成步）：Mock 面板，Phase 3 接真实数据 -->
+        <!-- ④ 视觉设计（Phase 2 起独立成步）：真实数据装配 → 模板渲染 → PNG 导出上传落库；封面直生效、章节卡绑槽位 -->
         <template v-else-if="activeStep === 'visual'">
           <VisualPanel :task-id="task.id" :title="title" :summary="summary" v-model:content="content" :material="materialPayload()"
             :theme-id="themeId" :theme-overrides="{ ...themeOverrides }" v-model:style-preset="stylePreset"
-            :bound-images="boundImages" @images-change="onVisualImagesChange" @apply-colors="onVisualColors" />
+            v-model:visual-state="visualState" :bound-images="boundImages"
+            @images-change="onVisualImagesChange" @apply-colors="onVisualColors" />
           <p class="step-hint">生成视觉图自动进入文章：封面直接生效，章节卡绑定正文图位</p>
         </template>
 
@@ -852,108 +610,19 @@ async function downloadAllImages() {
           <p class="step-hint">右侧预览实时反映排版效果，满意后进入下一步</p>
         </template>
 
-        <!-- ⑤ 发布前检查（Phase 6，§20）：八项清单 + 🟢/🔴 状态 + 提交审核 -->
+        <!-- ⑤ 发布前检查（Phase 6，§20）：九项清单 + 🟢/🔴 状态 + 提交审核（UI 在 StepCheck，状态/门禁仍在本父级） -->
         <template v-else-if="activeStep === 'check'">
-          <div class="precheck">
-            <div class="precheck-head">
-              <h3>发布前检查</h3>
-              <button :disabled="saving" @click="runCheck">规范检查</button>
-            </div>
-            <!-- 八项清单：✓ 已过 / ✗ 未过（附去哪一步修的提示） -->
-            <ul class="precheck-list">
-              <li v-for="item in precheckItems" :key="item.name" :class="item.ok ? 'ok' : 'bad'">
-                <span class="pc-mark">{{ item.ok ? '✓' : '✗' }}</span>
-                <span class="pc-name">{{ item.name }}</span>
-                <span v-if="!item.ok" class="pc-hint">{{ item.hint }}</span>
-              </li>
-            </ul>
-            <!-- 总状态：全绿可提交；有红项则阻断并列出（§30-④ 发现→告知→修复→才能提交） -->
-            <p class="precheck-state" :class="precheckReady ? 'ready' : 'blocked'">
-              {{ precheckReady ? '🟢 全部通过，可以提交审核' : '🔴 有未通过项，修复后再提交审核' }}
-            </p>
-            <!-- 提交审核：八项全过 + 整改清单清零（体验层；后端 rules-engine 为真门禁） -->
-            <button v-if="task.status === 'writing'" class="status-btn submit-btn"
-              :disabled="!precheckReady || checklistRemaining > 0"
-              :title="checklistRemaining > 0 ? `整改清单还剩 ${checklistRemaining} 条` : (!precheckReady ? '按上方清单逐项修复' : '')"
-              @click="changeStatus('reviewing')">
-              提交审核 →
-            </button>
-          </div>
-          <!-- 检查报告：规范检查的详细结果（可行动的整改清单） -->
-          <div v-if="report" class="report" :class="report.passed ? 'ok' : 'fail'">
-            <p>{{ report.passed ? '规范检查通过' : '存在 ' + report.errors.length + ' 个必须整改项' }}</p>
-            <ul v-if="report.errors.length">
-              <li v-for="(i, n) in report.errors" :key="'e' + n" class="err">【必须】{{ i.message }} —— {{ i.hint }}</li>
-            </ul>
-            <ul v-if="report.warnings.length">
-              <li v-for="(i, n) in report.warnings" :key="'w' + n" class="warn">【建议】{{ i.message }} —— {{ i.hint }}</li>
-            </ul>
-          </div>
-          <!-- 整改清单：打回时生成，逐条勾销，清零才能推回审核（仅写稿中且有清单时显示） -->
-          <div v-if="checklist.length && task.status === 'writing'" class="checklist">
-            <h3>整改清单（剩 {{ checklistRemaining }}/{{ checklist.length }}）</h3>
-            <ul>
-              <li v-for="item in checklist" :key="item.id" :class="{ done: item.done }">
-                <label>
-                  <input type="checkbox" :checked="item.done" @change="toggleChecklistItem(item)" />
-                  {{ item.text }}
-                </label>
-              </li>
-            </ul>
-            <p v-if="checklistRemaining === 0" class="checklist-ok">✓ 全部完成，可推进到审核</p>
-          </div>
-          <p v-if="task.status !== 'writing'" class="step-hint">
-            {{ task.status === 'reviewing' ? '已提交审核，审核操作见第 ⑥ 步' : '已发布，检查记录仅供回看' }}
-          </p>
+          <StepCheck :task="task" :precheck-items="precheckItems" :precheck-ready="precheckReady"
+            :precheck-advisory-count="precheckAdvisoryCount" :report="report" :checklist="checklist" :saving="saving"
+            @run-check="runCheck" @toggle="toggleChecklistItem" @submit="changeStatus('reviewing')" />
         </template>
 
         <!-- ⑥ 审核：状态推进/打回 + 分享链接 + 批注；published 态 = 发布准备（Phase 8，§23） -->
         <template v-else>
-          <!-- 发布准备：审核通过后的人工发布四步（复制 → 取图 → 公众号后台 → 已标记发布） -->
-          <div v-if="task.status === 'published'" class="publish-box">
-            <h3>🚀 发布准备（已标记为已发布）</h3>
-            <p class="publish-steps">① 复制文章 → ② 获取全部图片 → ③ 打开公众号后台粘贴并上传图片 → ④ 发布</p>
-            <div class="publish-actions">
-              <button class="copy-wechat" :disabled="!content" @click="copyToWechat">
-                {{ copied ? '✓ 已复制，去公众号粘贴' : '📋 复制文章' }}
-              </button>
-              <button :disabled="publishBox.loading" @click="downloadAllImages">
-                {{ publishBox.loading ? '下载中…' : '⬇ 获取全部图片' }}
-              </button>
-              <a href="https://mp.weixin.qq.com" target="_blank" rel="noopener">↗ 打开微信公众号后台</a>
-            </div>
-            <p v-if="publishBox.error" class="error">{{ publishBox.error }}</p>
-            <p class="step-hint">图片按「封面 / 第N图-说明」命名逐张下载；公众号后台粘贴正文后按对应位置上传</p>
-          </div>
-          <div class="review-actions">
-            <button v-if="task.status === 'reviewing'" class="status-btn" @click="changeStatus('published')">
-              审核通过，推进为已发布 →
-            </button>
-            <button v-if="task.status === 'reviewing'" class="status-btn reject" @click="openRejectModal">
-              打回修改
-            </button>
-            <button v-if="task.status !== 'published'" class="status-btn share" @click="generateShareLink">
-              生成分享链接（发审核人）
-            </button>
-          </div>
-          <!-- 分享链接展示 + 复制（生成后显示） -->
-          <div v-if="shareLink" class="share-link">
-            <a :href="shareLink" target="_blank" rel="noopener">{{ shareLink }}</a>
-            <button @click="copyShareLink">复制</button>
-          </div>
-          <!-- 批注区：写作者留言/审核人批注 -->
-          <div class="comments">
-            <h3>批注（{{ (task.comments || []).length }}）</h3>
-            <ul>
-              <li v-for="(c, n) in task.comments" :key="n">
-                <b>{{ c.by }}</b>：{{ c.text }}<span class="at">{{ (c.at || '').slice(5, 16).replace('T', ' ') }}</span>
-              </li>
-            </ul>
-            <div class="add-comment">
-              <input v-model="commentText" placeholder="留言/批注，如：第二段数据请核实" @keyup.enter="addComment" />
-              <button @click="addComment">提交</button>
-            </div>
-          </div>
+          <StepReview :task="task" :share-link="shareLink"
+            @pass="changeStatus('published')" @reject="applyReject"
+            @generate-share="generateShareLink" @refresh-task="emitRefreshAndGet"
+            @copy-wechat="copyToWechat" />
         </template>
       </div>
 
@@ -975,70 +644,13 @@ async function downloadAllImages() {
       <button class="next" :disabled="!nextStep" @click="gotoStep(nextStep)">下一步{{ nextStep ? '：' + stepLabel(nextStep) : '' }} →</button>
     </div>
 
-    <!-- 通用输入弹窗：替代原生 prompt（嵌入式预览环境不支持） -->
-    <div v-if="modal.show" class="modal-mask" @click.self="cancelModal">
-      <div class="modal">
-        <p class="modal-msg">{{ modal.message }}</p>
-        <input ref="modalInput" v-model="modal.value" @keyup.enter="confirmModal" @keyup.esc="cancelModal" />
-        <div class="modal-btns">
-          <button @click="cancelModal">取消</button>
-          <button @click="confirmModal">确定</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 标题候选点选弹窗 -->
-    <div v-if="titlePicker.show" class="modal-mask" @click.self="titlePicker.show = false">
-      <div class="modal">
-        <p class="modal-title">选择一个标题</p>
-        <button v-for="(t, i) in titlePicker.options" :key="i" class="option-btn" @click="pickTitle(t)">
-          {{ t }}
-        </button>
-        <div class="modal-btns">
-          <button @click="titlePicker.show = false">取消</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 改写指令弹窗：快捷按钮 + 自定义输入 -->
-    <div v-if="rewritePicker.show" class="modal-mask" @click.self="rewritePicker.show = false">
-      <div class="modal">
-        <p class="modal-title">改写选中的文字</p>
-        <div class="preset-grid">
-          <button v-for="p in rewritePresets" :key="p" class="option-btn" @click="execRewrite(p)">
-            {{ p }}
-          </button>
-        </div>
-        <input v-model="rewritePicker.custom" placeholder="或输入自定义改写要求" @keyup.enter="execRewrite(rewritePicker.custom)" />
-        <div class="modal-btns">
-          <button @click="rewritePicker.show = false">取消</button>
-          <button @click="execRewrite(rewritePicker.custom)">执行</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 打回弹窗：手动逐行 / 粘贴老师留言 AI 整理（P0-2） -->
-    <div v-if="rejectModal.show" class="modal-mask" @click.self="rejectModal.show = false">
-      <div class="modal">
-        <p class="modal-title">打回修改 · 录入整改清单</p>
-        <textarea v-model="rejectModal.input" rows="6" placeholder="每行一条整改项；或粘贴老师微信留言后点「AI 整理」"></textarea>
-        <div class="modal-btns">
-          <button @click="rejectModal.show = false">取消</button>
-          <button :disabled="rejectModal.loading" @click="aiOrganizeNotes">
-            {{ rejectModal.loading ? '整理中…' : '✨ AI 整理' }}
-          </button>
-          <button class="primary" @click="confirmReject">打回并生成清单</button>
-        </div>
-      </div>
-    </div>
-
     <!-- 模板画廊：点卡片应用皮肤；themeId 赋值后既有 watch 自动清覆盖+持久化 -->
     <ThemeGallery v-if="galleryOpen" :current="themeId"
       @select="(id) => { themeId = id; galleryOpen = false; }"
       @close="galleryOpen = false" />
 
-            <!-- AI 配色弹窗（Phase 5）：描述生成 + 参考图识别双模式 -->
-            <VisionSkinModal :show="skinModal" @close="skinModal = false" @apply="onSkinApply" />
+    <!-- AI 配色弹窗（Phase 5）：描述生成 + 参考图识别双模式 -->
+    <VisionSkinModal :show="skinModal" @close="skinModal = false" @apply="onSkinApply" />
   </section>
 </template>
 
@@ -1068,9 +680,6 @@ textarea { resize: vertical; }
 /* 工作台两栏：左=步骤操作区（随 activeStep 切换），右=预览常驻 */
 .workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .step-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-/* 写稿步的正文编辑区（随左栏伸缩） */
-.editor-left { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.editor-left textarea { flex: 1; }
 /* 常驻预览面板：随窗口滚动吸附视口 */
 .preview-pane { border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; position: sticky; top: 12px; min-width: 0; }
 .preview-tag { font-size: 13px; font-weight: 600; color: #555; }
@@ -1078,11 +687,9 @@ textarea { resize: vertical; }
 .copy-wechat { padding: 6px 12px; background: #1e88e5; color: #fff; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }
 .copy-wechat:disabled { background: #bbb; }
 .preview-body { overflow-y: auto; max-height: 620px; background: #ebebeb; }
-.word-count { color: #999; font-size: 12px; margin: 0; }
-/* 排版步控制条 + 检查/审核步操作行 */
+/* 排版步控制条 */
 .layout-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .layout-controls select { padding: 6px 8px; font-size: 13px; }
-.check-actions, .review-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* 头部标题行内编辑 */
 .head-title { flex: 1; font-size: 16px; font-weight: 600; min-width: 120px; }
 /* 步骤提示行 */
@@ -1093,48 +700,16 @@ textarea { resize: vertical; }
 .step-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .saved { color: #27ae60; font-size: 13px; white-space: nowrap; }
-.ai-toolbar { display: flex; gap: 8px; margin-top: 4px; }
-.ai-toolbar button { padding: 6px 12px; }
-/* P2-7：AI 等待进度提示 */
-.ai-progress { color: #b7791f; font-size: 13px; margin: 4px 0; }
 .error { color: #c0392b; white-space: pre-wrap; margin: 0; }
-.report { margin-top: 12px; padding: 12px; border-radius: 6px; font-size: 14px; }
-.report.ok { background: #eafaf1; }
-.report.fail { background: #fdecea; }
-.report ul { margin: 8px 0 0; padding-left: 18px; }
-.report .err { color: #c0392b; }
-.report .warn { color: #b7791f; }
-.comments { margin-top: 24px; border-top: 1px solid #eee; padding-top: 12px; }
-.comments ul { list-style: none; padding: 0; }
-.comments li { padding: 6px 0; border-bottom: 1px dashed #f0f0f0; }
-.comments .at { color: #aaa; font-size: 12px; margin-left: 8px; }
-.add-comment { display: flex; gap: 8px; margin-top: 8px; }
-.add-comment input { flex: 1; padding: 6px 10px; }
-.modal-mask { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: center; justify-content: center; z-index: 10; }
-.modal { background: #fff; border-radius: 8px; padding: 16px; width: min(420px, 90vw); display: flex; flex-direction: column; gap: 10px; }
-.modal-msg { margin: 0; white-space: pre-wrap; font-size: 14px; }
-.modal input { padding: 8px 10px; }
-.modal-btns { display: flex; justify-content: flex-end; gap: 8px; }
-.modal-title { margin: 0; font-size: 14px; font-weight: 600; }
-.option-btn { text-align: left; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa; cursor: pointer; }
-.option-btn:hover { border-color: #1e88e5; background: #eef6fd; }
-.preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.status-btn { padding: 6px 12px; background: #1e88e5; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-.status-btn.reject { background: #e67e22; }
-.status-btn.share { background: #8e44ad; }
-.share-link { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.share-link a { color: #8e44ad; word-break: break-all; }
-.share-link button { padding: 4px 10px; }
 
 /* 窄屏：工作台两栏改上下堆叠，预览不再吸附（延续 C 批响应式结论） */
 @media (max-width: 768px) {
   .workbench { grid-template-columns: 1fr; }
   .preview-pane { position: static; }
   .preview-body { max-height: 480px; }
-  /* C 批：工具条/预览头/AI工具条/详情头换行，多按钮不再溢出 */
+  /* C 批：工具条/预览头/详情头换行，多按钮不再溢出 */
   .detail-head { flex-wrap: wrap; }
   .preview-header { flex-wrap: wrap; }
-  .ai-toolbar { flex-wrap: wrap; }
   .step-nav { flex-wrap: wrap; }
 }
 
@@ -1148,43 +723,9 @@ textarea { resize: vertical; }
 .param-val { font-size: 12px; color: #999; width: 48px; text-align: right; }
 .param-reset { grid-column: 1 / -1; font-size: 12px; color: #999; }
 
-/* 整改清单（P0-2）：打回生成的待勾销条目区 */
-/* 发布前检查（Phase 6，§20）：八项清单 + 总状态 */
-.precheck { border: 1px solid #d8e4f8; border-radius: 8px; padding: 12px 14px; background: #fbfdff; }
-.precheck-head { display: flex; align-items: center; justify-content: space-between; }
-.precheck-head h3 { margin: 0; font-size: 15px; }
-.precheck-list { list-style: none; padding: 0; margin: 10px 0; }
-.precheck-list li { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px dashed #eef2f8; }
-.precheck-list li:last-child { border-bottom: none; }
-.pc-mark { width: 18px; text-align: center; flex-shrink: 0; }
-.precheck-list .ok .pc-mark { color: #27ae60; }
-.precheck-list .bad .pc-mark { color: #c0392b; }
-.pc-name { font-size: 14px; color: #333; flex-shrink: 0; }
-.precheck-list .bad .pc-name { color: #c0392b; }
-.pc-hint { font-size: 12px; color: #b7791f; }
-.precheck-state { font-size: 14px; font-weight: bold; margin: 8px 0 12px; }
-.precheck-state.ready { color: #27ae60; }
-.precheck-state.blocked { color: #c0392b; }
-.submit-btn { font-size: 15px; padding: 8px 24px; }
-.submit-btn:disabled { background: #bbb; cursor: not-allowed; }
 /* 素材已核实开关（§15） */
 .confirm-facts { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #555; }
 .confirm-facts input { margin: 0; }
-/* 发布准备（Phase 8，§23）：published 态人工发布面板 */
-.publish-box { border: 1px solid #bfe3c8; background: #f4fbf6; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-.publish-box h3 { margin: 0; font-size: 15px; color: #1e7e43; }
-.publish-steps { font-size: 13px; color: #555; margin: 0; }
-.publish-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.publish-actions button { padding: 8px 16px; font-size: 14px; cursor: pointer; }
-.publish-actions a { padding: 8px 16px; font-size: 14px; background: #27ae60; color: #fff; border-radius: 4px; text-decoration: none; white-space: nowrap; }
-.checklist { border: 1px solid #e6d9c8; border-radius: 8px; padding: 10px 14px; background: #fdf9f2; }
-.checklist h3 { margin: 0 0 8px; font-size: 14px; }
-.checklist ul { list-style: none; padding: 0; margin: 0; }
-.checklist li { padding: 4px 0; font-size: 14px; }
-.checklist li.done { color: #999; text-decoration: line-through; }
-.checklist-ok { color: #27ae60; font-size: 13px; margin: 6px 0 0; }
-/* 打回弹窗主按钮：与打回按钮同色系（橙） */
-.modal-btns .primary { background: #e67e22; color: #fff; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
 
 /* 流程步骤条（P1-3）：编辑器侧引导 UI，点击平滑滚动到对应区块 */
 .steps-bar { display: flex; align-items: center; gap: 6px; padding: 6px 0; flex-wrap: wrap; }
