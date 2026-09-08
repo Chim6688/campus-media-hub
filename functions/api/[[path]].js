@@ -11,7 +11,8 @@ import verify from '../../backend/functions/verify.mjs';
 import parsePdf from '../../backend/functions/parse-pdf.mjs';
 
 // 静态导入映射：esbuild 打包时随入口一起打进函数包（动态 import 模板串在 Workers 打包不可靠）
-const HANDLERS = {
+// 显式导出供一致性测试（cf-routes.test.mjs）：新增后端函数必须在此注册，否则生产 404 会被测试拦住
+export const HANDLERS = {
   tasks,
   ai,
   check,

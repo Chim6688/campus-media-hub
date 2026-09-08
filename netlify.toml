@@ -1,3 +1,6 @@
+# ⚠️ 历史遗留配置（2026-09-06 起生产已迁移 Cloudflare Pages，见 docs/运维手册-部署与额度.md）
+# 本文件仅服务 Netlify 旧备用站（https://timely-rugelach-be68fd.netlify.app），不再用于日常部署；
+# 日常部署走 wrangler 直传。停止 Netlify 自动构建需在 Netlify Dashboard → Build & deploy 暂停。
 [build]
   publish = "frontend/dist"
   functions = "backend/functions"
