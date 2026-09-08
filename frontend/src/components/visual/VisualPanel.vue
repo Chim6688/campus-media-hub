@@ -15,6 +15,7 @@ import VisualDesignAI from './VisualDesignAI.vue'; // AI 视觉设计（V2 Phase
 import VisualEditor from './VisualEditor.vue'; // 字段编辑（V2 Phase 1）
 import { COMPOSITIONS, COVER_COMPOSITIONS, SECTION_COMPOSITIONS } from '../../utils/compositions.js';
 import { ensurePlaceholder } from '../../utils/placeholder.js'; // 占位对齐（V2 Phase 3）
+import { normalizeVisualState, imageUrlById } from '../../utils/visual-state.js'; // v6 编辑态清洗/图片反查
 
 const props = defineProps({
   taskId: String, title: String, summary: String, material: Object,
@@ -28,6 +29,10 @@ const stylePreset = defineModel('stylePreset', { type: String, default: 'journal
 // 正文双向绑定（V2 Phase 3）：章节卡补占位需要回写正文（模式同 ImageWorkspace）
 const contentModel = defineModel('content', { type: String, default: '' });
 
+// 视觉设计编辑态（v6，总方案 §7.1）：构图/槽位/卡文案/选图引用，随任务持久化
+// 提升到 TaskDetail 由既有自动保存链路整体 PATCH（tasks.visual_state）；null = 无视觉编辑
+const visualState = defineModel('visualState', { type: Object, default: null });
+
 // 任务图片（选择器数据源 + 默认主图推导）
 const images = ref([]);
 const loading = ref(false);
@@ -40,12 +45,74 @@ const cardData = reactive(buildSectionData(1, { title: props.title, summary: pro
 if (!cardData.image2Url) cardData.image2Url = '';
 // 章节卡目标槽位：默认 1，可改（绑定第 N 个 [配图：] 占位）
 const cardSlot = ref(1);
-// 构图状态（V2 Phase 1）：按类型分别记忆，会话态（入库持久化留 Phase 2）
+// 构图状态（V2 Phase 1）：按类型分别记忆（v6 起随任务持久化，不再会话态）
 const composition = reactive({ cover: 'cover-hero', section: 'section-editorial' });
 // 当前编辑的视觉类型：两卡并存展示，编辑器/构图选择器跟随焦点卡
 const activeType = ref('cover');
 // 构图选项：按当前焦点卡类型过滤
 const compositionOptions = computed(() => (activeType.value === 'cover' ? COVER_COMPOSITIONS : SECTION_COMPOSITIONS));
+
+// ===== v6 视觉设计编辑态：进入时恢复（"下一张要生成什么"），编辑中同步上抛 =====
+// 产物（article_images source=ai）是另一回事，互不覆盖；本段只保证刷新/重进后可继续编辑
+let lastPayload = ''; // 上次同步序列化：内容无变化不重复上抛（防恢复触发空保存）
+
+// UI 编辑态 → 可存 payload（URL 引用反查图行 id，存 id 溯源防死链）
+function buildPayload() {
+  const urlToId = (u) => (images.value.find((i) => i.url === u)?.id) || null;
+  return {
+    cover: {
+      composition: composition.cover,
+      draft: {
+        org: coverData.org, title: coverData.title, subtitle: coverData.subtitle,
+        tags: [...coverData.tags], place: coverData.place, date: coverData.date,
+        imageId: urlToId(coverData.imageUrl),
+      },
+    },
+    section: {
+      composition: composition.section,
+      cardSlot: cardSlot.value,
+      draft: {
+        partNum: cardData.partNum, title: cardData.title, subtitle: cardData.subtitle,
+        imageId: urlToId(cardData.imageUrl), image2Id: urlToId(cardData.image2Url),
+      },
+    },
+  };
+}
+
+// 从任务持久化态恢复 UI（清洗后逐字段覆盖；图片按 id 反查，查不到保留自动回填兜底）
+function restoreVisualState() {
+  const saved = normalizeVisualState(visualState.value);
+  if (!saved) return;
+  composition.cover = saved.cover.composition;
+  composition.section = saved.section.composition;
+  cardSlot.value = saved.section.cardSlot;
+  const c = saved.cover.draft;
+  coverData.org = c.org;
+  coverData.title = c.title;
+  coverData.subtitle = c.subtitle;
+  coverData.tags = [...c.tags];
+  coverData.place = c.place;
+  coverData.date = c.date;
+  const cu = imageUrlById(images.value, c.imageId);
+  if (cu) coverData.imageUrl = cu;
+  const s = saved.section.draft;
+  cardData.partNum = s.partNum;
+  cardData.title = s.title;
+  cardData.subtitle = s.subtitle;
+  const su = imageUrlById(images.value, s.imageId);
+  if (su) cardData.imageUrl = su;
+  const s2 = imageUrlById(images.value, s.image2Id);
+  if (s2) cardData.image2Url = s2;
+}
+
+// 编辑（文案/选图/构图/槽位）→ 序列化上抛 → TaskDetail 自动保存（防抖统一通道）
+watch([coverData, cardData, composition, cardSlot], () => {
+  const payload = buildPayload();
+  const s = JSON.stringify(payload);
+  if (s === lastPayload) return; // 恢复引起的同值回写不重复上抛
+  lastPayload = s;
+  visualState.value = payload;
+}, { deep: true });
 
 async function refreshImages() {
   loading.value = true;
@@ -62,7 +129,11 @@ async function refreshImages() {
     loading.value = false;
   }
 }
-onMounted(refreshImages);
+// 挂载后先拉图片（id→URL 反查依赖）再恢复持久化编辑态；切任务重进本步会重建组件自然重走
+onMounted(async () => {
+  await refreshImages();
+  restoreVisualState();
+});
 
 // —— 图片选择弹窗 ——
 const picker = reactive({ show: false, target: '' }); // target: 'cover' | 'card'

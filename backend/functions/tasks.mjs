@@ -77,6 +77,10 @@ export default async (req) => {
         stylePreset: String(body.layout_theme.stylePreset || 'journal'), // Phase 2：结构风格（缺省 journal 兼容历史数据）
       };
     }
+    // 视觉设计编辑态（v6：构图/槽位/卡文案/选图引用；与图片产物分离，产物在 article_images）
+    if (body.visual_state && typeof body.visual_state === 'object' && !Array.isArray(body.visual_state)) {
+      patch.visual_state = body.visual_state;
+    }
     // 整改清单（P0-2：整体更新，模式同 material）
     if (Array.isArray(body.review_checklist)) patch.review_checklist = body.review_checklist;
     // 生成只读分享 token（P1-7：/share/:token 免口令查看）

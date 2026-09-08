@@ -114,3 +114,8 @@ for each row execute function touch_updated_at();
 insert into storage.buckets (id, name, public)
 values ('article-images', 'article-images', true)
 on conflict (id) do nothing;
+
+-- ========== v6 增量迁移（视觉设计编辑态持久化，幂等，可重复执行） ==========
+-- 只存"下一张要生成什么"（构图/槽位/卡文案/选图引用），不存图片二进制与产物；
+-- 产物仍是 article_images 行（source=ai）。null = 未做过视觉编辑（前端走默认装配）
+alter table tasks add column if not exists visual_state jsonb;
