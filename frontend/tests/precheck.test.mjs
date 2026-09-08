@@ -1,9 +1,9 @@
-// 发布前检查纯函数测试（V1.0 Phase 6，§20）：八项检查清单汇总
+// 发布前检查纯函数测试（V1.0 Phase 6，§20）：九项检查清单汇总
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPrecheck } from '../src/utils/precheck.js';
 
-// 基线任务：八项全过
+// 基线任务：九项全过
 const OK_TASK = {
   title: '这是一个合适的标题长度',
   summary: '摘要内容',
@@ -74,4 +74,23 @@ test('视觉图判定（Phase 8）：visualOk=false 不通过且 hint 指引第�
 test('视觉图判定：visualOk 缺省（老调用方）= false 不通过（向后兼容）', () => {
   const items = buildPrecheck(OK_TASK, { coverOk: true, boundCount: 1, report: { passed: true, errors: [], warnings: [] } });
   assert.equal(items.find((i) => i.name === '视觉图').ok, false);
+});
+
+test('block 语义（总方案 §9）：视觉图是唯一建议项 block=false，其余八项 block=true', () => {
+  const items = buildPrecheck(OK_TASK, OK_STATE);
+  assert.equal(items.length, 9);
+  assert.equal(items.filter((i) => i.block === false).length, 1);
+  assert.equal(items.find((i) => i.name === '视觉图').block, false);
+  for (const i of items) assert.equal(typeof i.block, 'boolean', `${i.name} 需要 block 布尔`);
+});
+
+test('提交门禁：视觉图未做（ok=false 但 block=false）时阻断项全过 → 可提交（Warning 语义）', () => {
+  // 模拟前端 ready 判定：只筛 block 项
+  const ready = (items) => items.filter((i) => i.block !== false).every((i) => i.ok);
+  const a = buildPrecheck(OK_TASK, { ...OK_STATE, visualOk: false });
+  assert.equal(a.find((i) => i.name === '视觉图').ok, false);
+  assert.equal(ready(a), true, '视觉图未做不阻断提交');
+  // 对照：标题缺失（阻断项）→ 不可提交
+  const b = buildPrecheck({ ...OK_TASK, title: '' }, OK_STATE);
+  assert.equal(ready(b), false);
 });

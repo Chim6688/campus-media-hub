@@ -1,6 +1,6 @@
 <script setup>
 // 审核工作台（V1.0 Phase 7，§22）：审核人通过 /share/:token 免口令访问
-// 左=完整公众号预览；右=检查结果（八项）+ 整改清单进度 + 审核意见 + [退回修改][审核通过]
+// 左=完整公众号预览；右=检查结果（九项）+ 整改清单进度 + 审核意见 + [退回修改][审核通过]
 // 审核写操作走 share_token 认证的 POST /api/share（approve 仅限审核中）
 import { ref, reactive, computed, onMounted } from 'vue';
 import { request } from '../api/client.js';
@@ -22,26 +22,35 @@ const rejectModal = reactive({ show: false, input: '' });
 
 const STATUS_TEXT = { writing: '写稿中', reviewing: '审核中', published: '已发布' };
 
-// 只读渲染：默认绿粉皮肤（审核人看到与作者一致的排版效果；images 传绑定正文图）
+// 绑定正文图（与作者端同源口径：type=content 且 position>0），预览与检查共用
+const boundImages = computed(() => images.value.filter((i) => i.type === 'content' && i.position > 0));
+
+// 只读渲染：读取任务实际排版主题（皮肤 id + 令牌覆盖 + 结构风格，审核人看到与作者一致的排版效果）
+// 旧任务无 layout_theme 时回退默认绿粉皮肤（与作者端回退链同语义）
 const html = computed(() =>
-  markdownToWechatHTML(task.value?.content || '', 'greenPink', {
+  markdownToWechatHTML(task.value?.content || '', task.value?.layout_theme?.id || 'greenPink', {
     title: task.value?.title,
     eyebrow: task.value?.type,
-    images: images.value,
+    overrides: task.value?.layout_theme?.overrides || {},
+    stylePreset: task.value?.layout_theme?.stylePreset, // 缺省 journal（wechat-format 内归一化）
+    images: boundImages.value,
   }),
 );
 
-// 八项检查清单：复用发布前检查纯函数（审核人与作者看到同一套标准）
+// 九项检查清单：复用发布前检查纯函数（审核人与作者看到同一套标准；visualOk 同口径=有 source=ai 图）
 const precheckItems = computed(() =>
   task.value
     ? buildPrecheck(task.value, {
         coverOk: images.value.some((i) => i.type === 'cover'),
-        boundCount: images.value.filter((i) => i.type === 'content' && i.position > 0).length,
+        boundCount: boundImages.value.length,
+        visualOk: images.value.some((i) => i.source === 'ai'),
         report: report.value,
       })
     : [],
 );
-const precheckReady = computed(() => precheckItems.value.every((i) => i.ok));
+// 与作者端同一判定（总方案 §9）：门禁只看阻断项，视觉图为建议项（Warning）不阻断
+const precheckReady = computed(() => precheckItems.value.filter((i) => i.block !== false).every((i) => i.ok));
+const precheckAdvisoryCount = computed(() => precheckItems.value.filter((i) => i.block === false && !i.ok).length);
 const undoneChecklist = computed(() => (task.value?.review_checklist || []).filter((i) => !i.done).length);
 
 onMounted(async () => {
@@ -110,7 +119,11 @@ async function act(action, text) {
             </li>
           </ul>
           <p class="pc-state" :class="precheckReady ? 'ready' : 'blocked'">
-            {{ precheckReady ? '🟢 检查全部通过' : '🔴 有未通过项（供参考，审核人可自行判断）' }}
+            {{ !precheckReady
+              ? '🔴 有核心项未通过（审核人可自行判断）'
+              : precheckAdvisoryCount
+                ? `🟢 核心检查通过（${precheckAdvisoryCount} 项建议未做，不阻塞）`
+                : '🟢 检查全部通过' }}
           </p>
 
           <!-- 整改清单进度：打回后作者逐条勾销，审核人可见 -->
@@ -186,7 +199,7 @@ async function act(action, text) {
 .article { border-radius: 8px; overflow: hidden; }
 .review-pane { border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #fff; }
 .review-pane h3 { margin: 4px 0 0; font-size: 14px; color: #333; }
-/* 八项检查（与作者端发布前检查同风格） */
+/* 九项检查（与作者端发布前检查同风格） */
 .pc-list { list-style: none; padding: 0; margin: 0; }
 .pc-list li { display: flex; align-items: baseline; gap: 6px; padding: 4px 0; font-size: 13px; border-bottom: 1px dashed #f0f0f0; }
 .pc-list li:last-child { border-bottom: none; }

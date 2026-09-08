@@ -29,15 +29,16 @@ export default async (req) => {
     const task = await findTaskByToken(db, token);
     if (!task) return err('分享链接无效或已过期', 404);
 
-    // 绑定图片（预览同源）；检查报告（审核人看到与作者一致的检查结果）
+    // 绑定图片（预览同源，source 供审核端 visualOk 判定）；检查报告（审核人看到与作者一致的检查结果）
     const [{ data: images }, report] = await Promise.all([
-      db.from('article_images').select('url, type, position, caption').eq('task_id', task.id),
+      db.from('article_images').select('url, type, position, caption, source').eq('task_id', task.id),
       runChecks(db, task),
     ]);
-    // 摘要视图：不外泄 comments/share_token；material 供审核页事实确认项展示（Phase 7）
-    const { id, theme, type, author, title, summary, content, status, review_checklist, material } = task;
+    // 摘要视图：不外泄 comments/share_token；material 供审核页事实确认项展示（Phase 7）；
+    // layout_theme 供审核端预览与作者端同皮肤同参数（P0 修复）
+    const { id, theme, type, author, title, summary, content, status, review_checklist, material, layout_theme } = task;
     return new Response(
-      JSON.stringify({ task: { id, theme, type, author, title, summary, content, status, review_checklist, material: material || {} }, images: images || [], report }),
+      JSON.stringify({ task: { id, theme, type, author, title, summary, content, status, review_checklist, material: material || {}, layout_theme: layout_theme || null }, images: images || [], report }),
       { headers },
     );
   }
